@@ -155,6 +155,8 @@ su root
 
 Tested and working on: Debian 11
 
+- See [kernel_installer.log](https://raw.githubusercontent.com/tmiland/kernel-installer/main/log/kernel_installer.log)
+
 ## Feature request and bug reports
 - [Bug report](https://github.com/tmiland/kernel-installer/issues/new?assignees=tmiland&labels=bug&template=bug_report.md&title=Bug-report:)
 - [Feature request](https://github.com/tmiland/kernel-installer/issues/new?assignees=tmiland&labels=enhancement&template=feature_request.md&title=Feature-request:)
