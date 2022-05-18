@@ -9,6 +9,8 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 
 ### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions, for all architectures.
 
+[![kernel-installer Image](https://raw.githubusercontent.com/tmiland/kernel-installer/main/img/kernel_installer.png)](https://github.com/tmiland/kernel-installer/blob/main/img/kernel_installer.png)
+
 ### Dependencies
 
 Will be installed when running script.
