@@ -55,6 +55,75 @@ For usage, run:
 ./kernel_installer.sh -h
 ```
 
+### Help output:
+
+```bash
+  If called without arguments, installs stable kernel using /opt/linux
+
+--help      |-h          display this help and exit
+--kernel    |-k          kernel version of choice
+--stable    |-s          stable kernel version
+--mainline  |-m          mainline kernel version
+--longterm  |-l          longterm kernel version
+--dir       |-d          install directory
+--kexec     |-x          load new kernel without reboot
+--config    |-c          Set configuration target
+--verbose   |-v          increase verbosity
+--uninstall |-u          uninstall kernel
+```
+
+To use opt --kernel:
+```bash
+./kernel_installer.sh --kernel 5.17.8
+```
+Else use:
+```bash
+./kernel_installer.sh --stable, --mainline or --longterm separately
+```
+To use --dir opt:
+```bash
+./kernel_installer.sh --dir /path/to/dir
+```
+To load [kernel without reboot](https://linux.die.net/man/8/kexec):
+```bash
+./kernel_installer.sh --kexec
+```
+To use --config:
+```bash
+./kernel_installer.sh --config menuconfig
+```
+default is `olddefconfig`
+
+### Configuration targets:
+
+```bash
+config          - Update current config utilising a line-oriented program
+nconfig         - Update current config utilising a ncurses menu based program
+menuconfig      - Update current config utilising a menu based program
+xconfig         - Update current config utilising a QT based front-end
+gconfig         - Update current config utilising a GTK based front-end
+oldconfig       - Update current config utilising a provided .config as base
+localmodconfig  - Update current config disabling modules not loaded
+localyesconfig  - Update current config converting local mods to core
+silentoldconfig - Same as oldconfig, but quietly, additionally update deps
+defconfig       - New config with default from ARCH supplied defconfig
+savedefconfig   - Save current config as ./defconfig (minimal config)
+allnoconfig     - New config where all options are answered with no
+allyesconfig    - New config where all options are accepted with yes
+allmodconfig    - New config selecting modules when possible
+alldefconfig    - New config with all symbols set to default
+randconfig      - New config with random answer to all options
+listnewconfig   - List new options
+olddefconfig    - Same as silentoldconfig but sets new symbols to their default value
+kvmconfig       - Enable additional options for guest kernel support
+tinyconfig      - Configure the tiniest possible kernel
+```
+
+Used together:
+```bash
+./kernel_installer.sh --stable --config menuconfig --kexec --dir /path/to/dir
+```
+
 Watch install log:
 ```bash
 tail -f ./kernel_installer.log
