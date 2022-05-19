@@ -47,6 +47,8 @@ CURRDIR=$(pwd)
 SCRIPT_FILENAME=$(basename "$0")
 # Logfile
 LOGFILE=$CURRDIR/kernel_installer.log
+# Default processing units (all available)
+NPROC=$(nproc)
 # Console output level; ignore debug level messages.
 VERBOSE=0
 # Show banners
@@ -227,6 +229,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--kexec     |-x${NORMAL}          load new kernel without reboot"
   printf "%s\\n" "  ${YELLOW}--config    |-c${NORMAL}          Set configuration target"
   printf "%s\\n" "  ${YELLOW}--verbose   |-v${NORMAL}          increase verbosity"
+  printf "%s\\n" "  ${YELLOW}--nproc     |-n${NORMAL}          set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--uninstall |-u${NORMAL}          uninstall kernel"
   #echo
 }
@@ -277,6 +280,11 @@ while [[ $# -gt 0 ]]; do
   --kexec | -x)
     shift
     KEXEC=1
+    ;;
+  --nproc | -n)
+    NPROC=$2
+    shift
+    shift
     ;;
   --uninstall | -u)
     shift
@@ -503,7 +511,7 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}5${NORMAL}: Kernel Compilation"
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
-      run_ok "make bindeb-pkg -j$(nproc)" "Compiling The Linux Kernel source code..."
+      run_ok "make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
 
       # Installation
       log_debug "Phase 5 of 5: Installation"

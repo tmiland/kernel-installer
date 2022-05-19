@@ -58,7 +58,7 @@ For usage, run:
 ### Help output:
 
 ```bash
-  If called without arguments, installs stable kernel using /opt/linux
+If called without arguments, installs stable kernel using /opt/linux
 
 --help      |-h          display this help and exit
 --kernel    |-k          kernel version of choice
@@ -69,6 +69,7 @@ For usage, run:
 --kexec     |-x          load new kernel without reboot
 --config    |-c          Set configuration target
 --verbose   |-v          increase verbosity
+--nproc     |-n          set the number of processing units to use
 --uninstall |-u          uninstall kernel
 ```
 
