@@ -151,6 +151,15 @@ Then:
 su root
 ```
 
+## Uninstall kernel
+
+To uninstall previously installed kernel:
+```bash
+./kernel_installer.sh --uninstall --kernel 5.17.7
+```
+
+- You will be prompted with a yes/no answer
+
 ## Testing
 
 Tested and working on: Debian 11
