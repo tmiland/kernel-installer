@@ -60,6 +60,8 @@ STABLE_VER=$(curl -s https://www.kernel.org | grep -A1 latest_link | tail -n1 | 
 MAINLINE_VER=$(curl -s https://www.kernel.org/ | grep -A1 'mainline:' | grep -oP '(?<=strong>).*(?=</strong.*)')
 LONGTERM_VER=$(curl -s https://www.kernel.org/ | grep -A1 'longterm:' | grep -oP '(?<=strong>).*(?=</strong.*)' | head -n 1)
 LINUX_VER=${LINUX_VER:-$STABLE_VER}
+# Installed kernel
+CURRENT_VER=$(uname -r)
 # Default kexec option
 KEXEC=${KEXEC:-0}
 # root
@@ -214,11 +216,11 @@ exit_script() {
 }
 
 usage() {
-  header
+  #header
   ## shellcheck disable=SC2046
-  printf "Usage: %s %s [options]" "${CYAN}" "${SCRIPT_FILENAME}${NORMAL}" && printf " | Script version: %s \\n" "${CYAN}${VERSION}${NORMAL}"
+  printf "Usage: %s %s [options]" "${CYAN}" "${SCRIPT_FILENAME}${NORMAL}"
   echo
-  echo "  If called without arguments, installs stable kernel ${LINUX_VER} using ${INSTALL_DIR}"
+  echo "  If called without arguments, installs stable kernel ${YELLOW}${LINUX_VER}${NORMAL} using ${INSTALL_DIR}"
   echo
   printf "%s\\n" "  ${YELLOW}--help      |-h${NORMAL}          display this help and exit"
   printf "%s\\n" "  ${YELLOW}--kernel    |-k${NORMAL}          kernel version of choice"
@@ -231,7 +233,9 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--verbose   |-v${NORMAL}          increase verbosity"
   printf "%s\\n" "  ${YELLOW}--nproc     |-n${NORMAL}          set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--uninstall |-u${NORMAL}          uninstall kernel"
-  #echo
+  echo
+  printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
+  echo
 }
 
 POSITIONAL_ARGS=()
