@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2221,SC2222
+# shellcheck disable=SC2221,SC2222,SC2181,SC2174
 
 ## Author: Tommy Miland (@tmiland) - Copyright (c) 2022
 
@@ -51,6 +51,8 @@ LOGFILE=$CURRDIR/kernel_installer.log
 NPROC=$(nproc)
 # Console output level; ignore debug level messages.
 VERBOSE=0
+# get-verified-tarball (Default: no)
+GET_VERIFIED_TARBALL=0
 # Show banners
 BANNERS=1
 # Default Install dir (Default: /opt/linux)
@@ -229,17 +231,18 @@ usage() {
   echo
   echo "  If called without arguments, installs stable kernel ${YELLOW}${LINUX_VER}${NORMAL} using ${INSTALL_DIR}"
   echo
-  printf "%s\\n" "  ${YELLOW}--help      |-h${NORMAL}          display this help and exit"
-  printf "%s\\n" "  ${YELLOW}--kernel    |-k${NORMAL}          kernel version of choice"
-  printf "%s\\n" "  ${YELLOW}--stable    |-s${NORMAL}          stable kernel version ${YELLOW}$STABLE_VER${NORMAL}"
-  printf "%s\\n" "  ${YELLOW}--mainline  |-m${NORMAL}          mainline kernel version ${YELLOW}$MAINLINE_VER${NORMAL}"
-  printf "%s\\n" "  ${YELLOW}--longterm  |-l${NORMAL}          longterm kernel version ${YELLOW}$LONGTERM_VER${NORMAL}"
-  printf "%s\\n" "  ${YELLOW}--dir       |-d${NORMAL}          install directory"
-  printf "%s\\n" "  ${YELLOW}--kexec     |-x${NORMAL}          load new kernel without reboot"
-  printf "%s\\n" "  ${YELLOW}--config    |-c${NORMAL}          Set configuration target"
-  printf "%s\\n" "  ${YELLOW}--verbose   |-v${NORMAL}          increase verbosity"
-  printf "%s\\n" "  ${YELLOW}--nproc     |-n${NORMAL}          set the number of processing units to use"
-  printf "%s\\n" "  ${YELLOW}--uninstall |-u${NORMAL}          uninstall kernel"
+  printf "%s\\n" "  ${YELLOW}--help                 |-h${NORMAL}   display this help and exit"
+  printf "%s\\n" "  ${YELLOW}--kernel               |-k${NORMAL}   kernel version of choice"
+  printf "%s\\n" "  ${YELLOW}--stable               |-s${NORMAL}   stable kernel version ${YELLOW}$STABLE_VER${NORMAL}"
+  printf "%s\\n" "  ${YELLOW}--mainline             |-m${NORMAL}   mainline kernel version ${YELLOW}$MAINLINE_VER${NORMAL}"
+  printf "%s\\n" "  ${YELLOW}--longterm             |-l${NORMAL}   longterm kernel version ${YELLOW}$LONGTERM_VER${NORMAL}"
+  printf "%s\\n" "  ${YELLOW}--dir                  |-d${NORMAL}   install directory"
+  printf "%s\\n" "  ${YELLOW}--kexec                |-x${NORMAL}   load new kernel without reboot"
+  printf "%s\\n" "  ${YELLOW}--config               |-c${NORMAL}   set configuration target"
+  printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
+  printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball"
+  printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
+  printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
   echo
@@ -256,6 +259,10 @@ while [[ $# -gt 0 ]]; do
   --verbose | -v)
     shift
     VERBOSE=1
+    ;;
+  --get-verified-tarball | -gvt)
+    shift
+    GET_VERIFIED_TARBALL=1
     ;;
   --stable | -s)
     shift
@@ -443,6 +450,224 @@ else
   exit 1;
 fi
 
+get_verified_tarball() {
+  # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
+  # get-verified-tarball
+  # --------------------
+  # Get Linux kernel tarball and cryptographically verify it,
+  # retrieving the PGP keys using the Web Key Directory (WKD)
+  # protocol if they are not already in the keyring.
+  #
+  # Pass the kernel version as the only parameter, or
+  # we'll grab the latest stable kernel.
+  #
+  # Example: ./get-verified-tarball 4.4.145
+  #
+  # Configurable parameters
+  # -----------------------
+  # Where to download the tarball and verification data.
+  TARGETDIR="$INSTALL_DIR"
+
+  # If you set this to empty value, we'll make a temporary
+  # directory and fetch the verification keys from the
+  # Web Key Directory each time. Also, see the USEKEYRING=
+  # configuration option for an alternative that doesn't
+  # rely on WKD.
+  GNUPGHOME="$HOME/.gnupg"
+
+  # For CI and other automated infrastructure, you may want to
+  # create a keyring containing the keys belonging to:
+  #  - autosigner@kernel.org
+  #  - torvalds@kernel.org
+  #  - gregkh@kernel.org
+  #
+  # To generate the keyring with these keys, do:
+  #   gpg --export autosigner@ torvalds@ gregkh@ > keyring.gpg
+  #   (or use full keyids for maximum certainty)
+  #
+  # Once you have keyring.gpg, install it on your CI system and set
+  # USEKEYRING to the full path to it. If unset, we generate our own
+  # from GNUPGHOME.
+  USEKEYRING=
+
+  # Point this at your GnuPG binary version 2.1.11 or above.
+  # If you are using USEKEYRING, GnuPG-1 will work, too.
+  GPGBIN="/usr/bin/gpg2"
+  GPGVBIN="/usr/bin/gpgv2"
+  # We need a compatible version of sha256sum, too
+  SHA256SUMBIN="/usr/bin/sha256sum"
+  # And curl
+  CURLBIN="/usr/bin/curl"
+  # And we need the xz binary
+  XZBIN="/usr/bin/xz"
+
+  # You shouldn't need to modify this, unless someone
+  # other than Linus or Greg start releasing kernels.
+  DEVKEYS="torvalds@kernel.org gregkh@kernel.org"
+  # Don't add this to DEVKEYS, as it plays a wholly
+  # different role and is NOT a key that should be used
+  # to verify kernel tarball signatures (just the checksums).
+  SHAKEYS="autosigner@kernel.org"
+
+  # What kernel version do you want?
+  # LINUX_VER=${1}
+  # if [[ -z ${LINUX_VER} ]]; then
+  #     # Assume you want the latest stable
+  #     LINUX_VER=$(${CURLBIN} -sL https://www.kernel.org/finger_banner \
+  #           | grep 'latest stable version' \
+  #           | awk -F: '{gsub(/ /,"", $0); print $2}')
+  # fi
+  # if [[ -z ${LINUX_VER} ]]; then
+  #     echo "Could not figure out the latest stable version."
+  #     exit 1
+  # fi
+
+  MAJOR="$(echo "${LINUX_VER}" | cut -d. -f1)"
+  if [[ ${MAJOR} -lt 3 ]]; then
+      echo "This script only supports kernel v3.x.x and above"
+      exit 1
+  fi
+
+  if [[ ! -d ${TARGETDIR} ]]; then
+      echo "${TARGETDIR} does not exist"
+      exit 1
+  fi
+
+  TARGET="${TARGETDIR}/linux-${LINUX_VER}.tar.xz"
+  # Do we already have this file?
+  if [[ -f ${TARGET} ]]; then
+      echo "File ${TARGETDIR}/linux-${LINUX_VER}.tar.xz already exists."
+      exit 0
+  fi
+
+  # Start by making sure our GnuPG environment is sane
+  if [[ ! -x ${GPGBIN} ]]; then
+      echo "Could not find gpg in ${GPGBIN}"
+      exit 1
+  fi
+  if [[ ! -x ${GPGVBIN} ]]; then
+      echo "Could not find gpgv in ${GPGVBIN}"
+      exit 1
+  fi
+
+  # Let's make a safe temporary directory for intermediates
+  TMPDIR=$(mktemp -d "${TARGETDIR}"/linux-tarball-verify.XXXXXXXXX.untrusted)
+  echo "Using TMPDIR=${TMPDIR}"
+  # Are we using a keyring?
+  if [[ -z ${USEKEYRING} ]]; then
+      if [[ -z ${GNUPGHOME} ]]; then
+          GNUPGHOME="${TMPDIR}/gnupg"
+      elif [[ ! -d ${GNUPGHOME} ]]; then
+          echo "GNUPGHOME directory ${GNUPGHOME} does not exist"
+          echo -n "Create it? [Y/n]"
+          read -r YN
+          if [[ ${YN} == 'n' ]]; then
+              echo "Exiting"
+              rm -rf "${TMPDIR}"
+              exit 1
+          fi
+      fi
+      mkdir -p -m 0700 "${GNUPGHOME}"
+      echo "Making sure we have all the necessary keys"
+      ${GPGBIN} --batch --quiet \
+          --homedir "${GNUPGHOME}" \
+          --auto-key-locate wkd \
+          --locate-keys "${DEVKEYS}" ${SHAKEYS}
+      # If this returned non-0, we bail
+      
+      if [[ $? != "0" ]]; then
+          echo "Something went wrong fetching keys"
+          rm -rf "${TMPDIR}"
+          exit 1
+      fi
+      # Make a temporary keyring and set USEKEYRING to it
+      USEKEYRING=${TMPDIR}/keyring.gpg
+      ${GPGBIN} --batch --export "${DEVKEYS}" ${SHAKEYS} > "${USEKEYRING}"
+  fi
+  # Now we make two keyrings -- one for the autosigner, and
+  # the other for kernel developers. We do this in order to
+  # make sure that we never verify kernel tarballs using the
+  # autosigner keys, only using developer keys.
+  SHAKEYRING=${TMPDIR}/shakeyring.gpg
+  ${GPGBIN} --batch \
+      --no-default-keyring --keyring "${USEKEYRING}" \
+      --export ${SHAKEYS} > "${SHAKEYRING}"
+  DEVKEYRING=${TMPDIR}/devkeyring.gpg
+  ${GPGBIN} --batch \
+      --no-default-keyring --keyring "${USEKEYRING}" \
+      --export "${DEVKEYS}" > "${DEVKEYRING}"
+
+  # Now that we know we can verify them, grab the contents
+  TXZ="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${LINUX_VER}.tar.xz"
+  SIG="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${LINUX_VER}.tar.sign"
+  SHA="https://www.kernel.org/pub/linux/kernel/v${MAJOR}.x/sha256sums.asc"
+
+  # Before we verify the developer signature, we make sure that the
+  # tarball matches what is on the kernel.org master. This avoids
+  # CDN cache poisoning that could, in theory, use vulnerabilities in
+  # the XZ binary to alter the verification process or compromise the
+  # system performing the verification.
+  SHAFILE=${TMPDIR}/sha256sums.asc
+  echo "Downloading the checksums file for linux-${LINUX_VER}"
+  if ! ${CURLBIN} -sL -o "${SHAFILE}" "${SHA}"; then
+      echo "Failed to download the checksums file"
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+  echo "Verifying the checksums file"
+  COUNT=$(${GPGVBIN} --keyring="${SHAKEYRING}" --status-fd=1 "${SHAFILE}" \
+          | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
+  if [[ ${COUNT} -lt 2 ]]; then
+      echo "FAILED to verify the sha256sums.asc file."
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+  # Grab only the tarball we want from the full list
+  SHACHECK=${TMPDIR}/sha256sums.txt
+  grep "linux-${LINUX_VER}.tar.xz" "${SHAFILE}" > "${SHACHECK}"
+
+  echo
+  echo "Downloading the signature file for linux-${LINUX_VER}"
+  SIGFILE=${TMPDIR}/linux-${LINUX_VER}.tar.asc
+  if ! ${CURLBIN} -sL -o "${SIGFILE}" "${SIG}"; then
+      echo "Failed to download the signature file"
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+  echo "Downloading the XZ tarball for linux-${LINUX_VER}"
+  TXZFILE=${TMPDIR}/linux-${LINUX_VER}.tar.xz
+  if ! ${CURLBIN} -L -o "${TXZFILE}" "${TXZ}"; then
+      echo "Failed to download the tarball"
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+
+  pushd "${TMPDIR}" >/dev/null || exit
+  echo "Verifying checksum on linux-${LINUX_VER}.tar.xz"
+  if ! ${SHA256SUMBIN} -c "${SHACHECK}"; then
+      echo "FAILED to verify the downloaded tarball checksum"
+      popd >/dev/null || exit
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+  popd >/dev/null || exit
+
+  echo
+  echo "Verifying developer signature on the tarball"
+  COUNT=$(${XZBIN} -cd "${TXZFILE}" \
+          | ${GPGVBIN} --keyring="${DEVKEYRING}" --status-fd=1 "${SIGFILE}" - \
+          | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
+  if [[ ${COUNT} -lt 2 ]]; then
+      echo "FAILED to verify the tarball!"
+      rm -rf "${TMPDIR}"
+      exit 1
+  fi
+  mv -f "${TXZFILE}" "${TARGET}"
+  rm -rf "${TMPDIR}"
+  echo
+  echo "Successfully downloaded and verified ${TARGET}"
+}
+
 install_kernel() {
   clear
   header_logo
@@ -486,25 +711,30 @@ install_kernel() {
   fi
   if [ -d "$INSTALL_DIR" ]; then
     #(
-      #cd "$INSTALL_DIR"/linux || exit
-      # log_debug "Deleting old Linux source code files in $INSTALL_DIR/linux"
-      # rm -rf "$INSTALL_DIR"/linux/*
-      cd "$INSTALL_DIR" || exit 1
-      log_debug "Downloading Linux source code"
-      if [ ! $LINUX_VER_NAME = "Mainline" ]; then
+    #cd "$INSTALL_DIR"/linux || exit
+    # log_debug "Deleting old Linux source code files in $INSTALL_DIR/linux"
+    # rm -rf "$INSTALL_DIR"/linux/*
+    cd "$INSTALL_DIR" || exit 1
+    log_debug "Downloading Linux source code"
+    if [ ! $LINUX_VER_NAME = "Mainline" ]; then
+      if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
         # Kernel url 1 (Stable/longterm)
         kernel_url=https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/linux-"${LINUX_VER}".tar.xz
         file_ext=xz
       else
+        # get-verified-tarball function
+        get_verified_tarball
+      fi
+      else
         # Kernel url 2 (Mainline)
         kernel_url=https://git.kernel.org/torvalds/t/linux-"${LINUX_VER}".tar.gz
         file_ext=gz
-      fi
-      if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
-        run_ok "wget -c $kernel_url" "Downloading..."
-      fi
-      log_debug "Unpacking Linux source code"
-      tar xvf linux-"${LINUX_VER}".tar.$file_ext >>"${RUN_LOG}" 2>&1
+    fi
+    if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
+      run_ok "wget -c $kernel_url" "Downloading..."
+    fi
+    log_debug "Unpacking Linux source code"
+    tar xvf linux-"${LINUX_VER}".tar.$file_ext >>"${RUN_LOG}" 2>&1
     #)
   fi
   if [ -d "$INSTALL_DIR"/linux-"${LINUX_VER}" ]; then

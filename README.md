@@ -60,17 +60,18 @@ For usage, run:
 ```bash
 If called without arguments, installs stable kernel using /opt/linux
 
---help      |-h          display this help and exit
---kernel    |-k          kernel version of choice
---stable    |-s          stable kernel version
---mainline  |-m          mainline kernel version
---longterm  |-l          longterm kernel version
---dir       |-d          install directory
---kexec     |-x          load new kernel without reboot
---config    |-c          Set configuration target
---verbose   |-v          increase verbosity
---nproc     |-n          set the number of processing units to use
---uninstall |-u          uninstall kernel
+--help                 |-h          display this help and exit
+--kernel               |-k          kernel version of choice
+--stable               |-s          stable kernel version
+--mainline             |-m          mainline kernel version
+--longterm             |-l          longterm kernel version
+--dir                  |-d          install directory
+--kexec                |-x          load new kernel without reboot
+--config               |-c          Set configuration target
+--verbose              |-v          increase verbosity
+--get-verified-tarball |-gvt        cryptographically verify kernel tarball
+--nproc                |-n          set the number of processing units to use
+--uninstall            |-u          uninstall kernel
 ```
 
 To use opt --kernel:
@@ -120,9 +121,16 @@ kvmconfig       - Enable additional options for guest kernel support
 tinyconfig      - Configure the tiniest possible kernel
 ```
 
+To use --get-verified-tarball:
+```bash
+./kernel_installer.sh --get-verified-tarball
+```
+ - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
+ - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
+
 Used together:
 ```bash
-./kernel_installer.sh --stable --config menuconfig --kexec --dir /path/to/dir
+./kernel_installer.sh --stable --config menuconfig --kexec --dir /path/to/dir --get-verified-tarball
 ```
 
 Watch install log:
