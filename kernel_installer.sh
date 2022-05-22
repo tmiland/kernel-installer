@@ -508,8 +508,11 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}5${NORMAL}: Setup kernel"
       cp /boot/config-"$(uname -r)" .config
       log_debug "Configuring..."
-      run_ok "make $CONFIG_OPTION" "Writing configuration..."
-
+      if [ ! "$CONFIG_OPTION" = "olddefconfig" ]; then
+        make "$CONFIG_OPTION"
+      else  
+        run_ok "make $CONFIG_OPTION" "Writing configuration..."
+      fi
       # Compilation
       log_debug "Phase 4 of 5: Compilation"
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}5${NORMAL}: Kernel Compilation"
