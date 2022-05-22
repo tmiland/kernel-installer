@@ -55,10 +55,17 @@ VERBOSE=0
 BANNERS=1
 # Default Install dir (Default: /opt/linux)
 INSTALL_DIR=${INSTALL_DIR:-/opt/linux}
+# https://stackoverflow.com/a/51068988
+latest_kernel() {
+  curl -s https://www.kernel.org/finger_banner | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
+}
 # Default Kernel version
-STABLE_VER=$(curl -s https://www.kernel.org | grep -A1 latest_link | tail -n1 | grep -E -o '>[^<]+' | grep -E -o '[^>]+')
-MAINLINE_VER=$(curl -s https://www.kernel.org/ | grep -A1 'mainline:' | grep -oP '(?<=strong>).*(?=</strong.*)')
-LONGTERM_VER=$(curl -s https://www.kernel.org/ | grep -A1 'longterm:' | grep -oP '(?<=strong>).*(?=</strong.*)' | head -n 1)
+STABLE_VER=$(latest_kernel stable)
+# Mainline kernel version
+MAINLINE_VER=$(latest_kernel mainline)
+# Lonterm kernel version
+LONGTERM_VER=$(latest_kernel longterm)
+# Default kernel version without arguments
 LINUX_VER=${LINUX_VER:-$STABLE_VER}
 # Installed kernel
 CURRENT_VER=$(uname -r)
@@ -493,7 +500,9 @@ install_kernel() {
         kernel_url=https://git.kernel.org/torvalds/t/linux-"${LINUX_VER}".tar.gz
         file_ext=gz
       fi
-      run_ok "wget -c $kernel_url" "Downloading..."
+      if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
+        run_ok "wget -c $kernel_url" "Downloading..."
+      fi
       log_debug "Unpacking Linux source code"
       tar xvf linux-"${LINUX_VER}".tar.$file_ext >>"${RUN_LOG}" 2>&1
     #)
@@ -526,9 +535,34 @@ install_kernel() {
       cd - 1>/dev/null 2>&1 || exit 1
     )
   fi
-  run_ok "dpkg -i linux-image-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
-  run_ok "dpkg -i linux-headers-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+  if [ $LINUX_VER_NAME = "Mainline" ]; then
 
+    MAINLINE_VER_FILE="$INSTALL_DIR"/linux-"${LINUX_VER}"/Makefile
+    MAINLINE_VER_FINAL_FILE="$INSTALL_DIR"/mainline_full_ver
+
+    get_mainline_full_ver() {
+      # shellcheck disable=SC2046
+      echo $(
+      sed -n '2 s/.*VERSION *= *\([^ ]*.*\)/\1/p' "$1"
+      sed -n '3 s/.*PATCHLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
+      sed -n '4 s/.*SUBLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
+      sed -n '5 s/.*EXTRAVERSION *= *\([^ ]*.*\)/\1/p' "$1"
+      )
+    }
+    # Grab version numbers from Makefile > Output to final version file
+    get_mainline_full_ver "$MAINLINE_VER_FILE" > "$MAINLINE_VER_FINAL_FILE"
+    # Strip spaces on the first two and add a . then just stript the last space
+    sed -i 's/  */./;s/  */./;s/ //g' "$MAINLINE_VER_FINAL_FILE"
+    # Final version should look like 5.18.0-rc7
+    MAINLINE_FULL_VER=$(cat "$MAINLINE_VER_FINAL_FILE")
+    # Install
+    run_ok "dpkg -i linux-image-\"${MAINLINE_FULL_VER}\"_\"${MAINLINE_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+    run_ok "dpkg -i linux-headers-\"${MAINLINE_FULL_VER}\"_\"${MAINLINE_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+  else
+    # Install
+    run_ok "dpkg -i linux-image-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+    run_ok "dpkg -i linux-headers-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+  fi
   # Cleanup
   printf "%s \\n" "${GREEN}▣▣▣▣▣${NORMAL} Cleaning up"
   if [ "$INSTALL_DIR" != "" ] && [ "$INSTALL_DIR" != "/" ]; then
