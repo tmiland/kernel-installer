@@ -127,6 +127,7 @@ To use --get-verified-tarball:
 ```
  - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
  - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
+ - Installing dependencies `gnupg2` and `gpgv2` if not installed
 
 Used together:
 ```bash
