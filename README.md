@@ -62,15 +62,17 @@ If called without arguments, installs stable kernel using /opt/linux
 
 --help                 |-h          display this help and exit
 --kernel               |-k          kernel version of choice
---stable               |-s          stable kernel version
---mainline             |-m          mainline kernel version
---longterm             |-l          longterm kernel version
+--stable               |-s          stable kernel version 5.18
+--mainline             |-m          mainline kernel version 5.18
+--longterm             |-l          longterm kernel version 5.15.41
 --dir                  |-d          install directory
 --kexec                |-x          load new kernel without reboot
---config               |-c          Set configuration target
+--config               |-c          set configuration target
 --verbose              |-v          increase verbosity
 --get-verified-tarball |-gvt        cryptographically verify kernel tarball
 --nproc                |-n          set the number of processing units to use
+--enable-debug-info    |-edi        enable debug info
+--lowlatency           |-low        convert generic config to lowlatency
 --uninstall            |-u          uninstall kernel
 ```
 

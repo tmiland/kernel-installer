@@ -55,6 +55,8 @@ NPROC=$(nproc)
 VERBOSE=0
 # Disable debug info since it's enabled by default to speed up kernel compilation
 ENABLE_DEBUG_INFO=0
+# Low latency (Default off)
+LOWLATENCY=0
 # get-verified-tarball (Default: no)
 GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-0}
 # Show banners (Default: yes)
@@ -230,6 +232,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
+  printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
@@ -295,6 +298,10 @@ while [[ $# -gt 0 ]]; do
     --enable-debug-info | -edi)
       shift
       ENABLE_DEBUG_INFO=1
+      ;;
+    --lowlatency | -low)
+      shift
+      LOWLATENCY=1
       ;;
     --uninstall | -u)
       shift
@@ -772,6 +779,20 @@ install_kernel() {
           scripts/config --set-val DEBUG_INFO n
           scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
         fi
+      fi
+      if [ "$LOWLATENCY" = "1" ]; then
+        # convert generic config to lowlatency
+
+        scripts/config --disable COMEDI_TESTS_EXAMPLE
+        scripts/config --disable COMEDI_TESTS_NI_ROUTES
+        scripts/config --set-val CONFIG_HZ 1000
+        scripts/config --enable HZ_1000
+        scripts/config --disable HZ_250
+
+        scripts/config --enable LATENCYTOP
+        scripts/config --enable PREEMPT
+        scripts/config --disable PREEMPT_VOLUNTARY
+        scripts/config --set-val TEST_DIV64 m
       fi
       echo
       # Compilation
