@@ -75,8 +75,12 @@ MAINLINE_VER=$(latest_kernel mainline)
 LONGTERM_VER=$(latest_kernel longterm)
 # Default kernel version without arguments
 LINUX_VER=${LINUX_VER:-$STABLE_VER}
+# Default linux version name
+LINUX_VER_NAME=Stable
 # Installed kernel
 CURRENT_VER=$(uname -r)
+# Arch
+ARCH=$(uname -m)
 # Default kexec option
 KEXEC=${KEXEC:-0}
 # root
@@ -358,7 +362,7 @@ case "$DISTRO" in
     PKGCMD="yes | LC_ALL=en_US.UTF-8 pacman -S"
     LSB=lsb-release
     DISTRO_GROUP=Arch
-    echo -e "${RED}${BALLOT_X} distro not yet supported: '$DISTRO'${NORMAL}" ; exit 1
+    # echo -e "${RED}${BALLOT_X} distro not yet supported: '$DISTRO'${NORMAL}" ; exit 1
     ;;
   *) echo -e "${RED}${BALLOT_X} unknown distro: '$DISTRO'${NORMAL}" ; exit 1 ;;
 esac
@@ -434,16 +438,16 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   #   PKGCHK="rpm --quiet --query"
   #   # Install packages
   #   INSTALL_PKGS=""
-  # elif [[ $DISTRO_GROUP == "Arch" ]]; then
-  #   SUDO="sudo"
-  #   UPDATE="pacman -Syu"
-  #   INSTALL="pacman -S --noconfirm --needed"
-  #   UNINSTALL="pacman -R"
-  #   PURGE="pacman -Rs"
-  #   CLEAN="pacman -Sc"
-  #   PKGCHK="pacman -Qs"
-  #   # Install packages
-  #   INSTALL_PKGS=""
+elif [[ $DISTRO_GROUP == "Arch" ]]; then
+  # SUDO="sudo"
+  UPDATE="pacman -Syu"
+  INSTALL="pacman -S --noconfirm --needed"
+  # UNINSTALL="pacman -R"
+  # PURGE="pacman -Rs"
+  # CLEAN="pacman -Sc"
+  PKGCHK="pacman -Qs"
+  # Install packages
+  INSTALL_PKGS="wget curl rsync base-devel xmlto kmod inetutils bc libelf git cpio perl tar xz pahole"
 else
   echo -e "${RED}${BALLOT_X} Error: Sorry, your OS is not supported.${NORMAL}"
   exit 1;
@@ -755,11 +759,15 @@ install_kernel() {
       log_debug "Phase 3 of 5: Configuration"
       printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}5${NORMAL}: Setup kernel"
       # cp /boot/config-"$(uname -r)" .config
+      if [[ $DISTRO_GROUP == "Arch" ]]; then
+        make -j${NPROC} mrproper
+        zcat /proc/config.gz > .config
+      fi
       log_debug "Configuring..."
       if [ ! "$CONFIG_OPTION" = "olddefconfig" ]; then
-        make "$CONFIG_OPTION"
+        make -j${NPROC} "$CONFIG_OPTION"
       else
-        run_ok "make $CONFIG_OPTION" "Writing configuration..."
+        run_ok "make -j${NPROC} $CONFIG_OPTION" "Writing configuration..."
         log_success "Configuration finished"
       fi
       read_sleep 1
@@ -780,6 +788,7 @@ install_kernel() {
           scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
         fi
       fi
+
       if [ "$LOWLATENCY" = "1" ]; then
         # convert generic config to lowlatency
 
@@ -800,7 +809,55 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}5${NORMAL}: Kernel Compilation"
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
-      run_ok "make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+
+      LINUX_VER_FILE="$INSTALL_DIR"/linux-"${LINUX_VER}"/Makefile
+      LINUX_VER_FINAL_FILE="$INSTALL_DIR"/linux_full_ver
+
+      get_linux_full_ver() {
+        # shellcheck disable=SC2046
+        echo $(
+          sed -n '2 s/.*VERSION *= *\([^ ]*.*\)/\1/p' "$1"
+          sed -n '3 s/.*PATCHLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
+          sed -n '4 s/.*SUBLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
+          sed -n '5 s/.*EXTRAVERSION *= *\([^ ]*.*\)/\1/p' "$1"
+        )
+      }
+      # Grab version numbers from Makefile > Output to final version file
+      get_linux_full_ver "$LINUX_VER_FILE" > "$LINUX_VER_FINAL_FILE"
+      # Strip spaces on the first two and add a . then just stript the last space
+      sed -i 's/  */./;s/  */./;s/ //g' "$LINUX_VER_FINAL_FILE"
+      # Final version should look like 5.18.0-rc7
+      LINUX_FULL_VER=$(cat "$LINUX_VER_FINAL_FILE")
+
+      if [[ $DISTRO_GROUP == "Debian" ]]; then
+
+        run_ok "make -j${NPROC} bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+
+      elif [[ $DISTRO_GROUP == "Arch" ]]; then
+
+        run_ok "make -j${NPROC}" "Compiling The Linux Kernel source code..."
+        run_ok "make -j${NPROC} modules" "Making Modules..."
+        run_ok "make -j${NPROC} modules_install" "Installing Modules..."
+        # Make bzImage kernel file if it doesn't exist
+        if [[ ! -f arch/x86/boot/bzImage ]]; then
+          make -j${NPROC} bzImage
+        fi
+        # Copy the new kernel to /boot dir
+        cp -v arch/x86/boot/bzImage /boot/vmlinuz-"${LINUX_FULL_VER}"-"${ARCH}"
+        # Automated preset method
+        # PRESET_FILE=/etc/mkinitcpio.d/linux"${LINUX_VER}".preset
+        # cp /etc/mkinitcpio.d/linux.preset ${PRESET_FILE}
+        # sed -i 's/ALL_kver="/boot/vmlinuz-linux"/ALL_kver="/boot/vmlinuz-linux'${LINUX_VER}'"/g' ${PRESET_FILE}
+        # sed -i 's/default_image="/boot/initramfs-linux.img"/default_image="/boot/initramfs-linux'${LINUX_VER}'.img/g' ${PRESET_FILE}
+        # sed -i 's/fallback_image="/boot/initramfs-linux-fallback.img"/fallback_image="/boot/initramfs-linux'${LINUX_VER}'-fallback.img"/g' ${PRESET_FILE}
+        # run_ok "mkinitcpio -p linux${LINUX_VER}" "generating the initramfs images..."
+        # Manual method
+        run_ok "mkinitcpio -k ${LINUX_FULL_VER}-${ARCH} -g /boot/initramfs-${LINUX_FULL_VER}-${ARCH}.img" "generating the initramfs images..."
+        run_ok "grub-mkconfig -o /boot/grub/grub.cfg" "Generating the main grub configuration..."
+      else
+        echo -e "${RED}${BALLOT_X} Error: Sorry, your OS is not supported.${NORMAL}"
+        exit 1;
+      fi
       log_success "Compiling finished"
       echo
       # Installation
@@ -809,40 +866,15 @@ install_kernel() {
       cd - 1>/dev/null 2>&1 || exit 1
     )
   fi
-  # if [ $LINUX_VER_NAME = "Mainline" ]; then
 
-  LINUX_VER_FILE="$INSTALL_DIR"/linux-"${LINUX_VER}"/Makefile
-  LINUX_VER_FINAL_FILE="$INSTALL_DIR"/linux_full_ver
+  if [[ $DISTRO_GROUP == "Debian" ]]; then
 
-  get_linux_full_ver() {
-    # shellcheck disable=SC2046
-    echo $(
-      sed -n '2 s/.*VERSION *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '3 s/.*PATCHLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '4 s/.*SUBLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '5 s/.*EXTRAVERSION *= *\([^ ]*.*\)/\1/p' "$1"
-    )
-  }
-  # Grab version numbers from Makefile > Output to final version file
-  get_linux_full_ver "$LINUX_VER_FILE" > "$LINUX_VER_FINAL_FILE"
-  # Strip spaces on the first two and add a . then just stript the last space
-  sed -i 's/  */./;s/  */./;s/ //g' "$LINUX_VER_FINAL_FILE"
-  # Final version should look like 5.18.0-rc7
-  LINUX_FULL_VER=$(cat "$LINUX_VER_FINAL_FILE")
-  # Install
-  run_ok "dpkg -i linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
-  run_ok "dpkg -i linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+    # Install
+    run_ok "dpkg -i linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+    run_ok "dpkg -i linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+
+  fi
   log_success "Installation finished"
-  # else
-  #   # Install
-  #   run_ok "dpkg -i linux-image-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
-  #   run_ok "dpkg -i linux-headers-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
-  #   log_success "Installation finished"
-  # fi
-  # if /usr/sbin/dkms; then
-  #   run_ok "dkms autoinstall -k ${CURRENT_VER}" "triggering installation of modules for the currently loaded kernel: ${CURRENT_VER}"
-  #   log_success "Module installation finished"
-  # fi
   echo
   # Cleanup
   printf "%s \\n" "${GREEN}▣▣▣▣▣${NORMAL} Cleaning up"
