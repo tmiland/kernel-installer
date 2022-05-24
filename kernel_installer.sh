@@ -53,8 +53,8 @@ LOGFILE=$CURRDIR/kernel_installer.log
 NPROC=$(nproc)
 # Console output level; ignore debug level messages.
 VERBOSE=0
-# Disable DEBUG_INFO to speed up kernel compilation
-DISABLE_DEBUG_INFO=1
+# Disable debug info since it's enabled by default to speed up kernel compilation
+ENABLE_DEBUG_INFO=0
 # get-verified-tarball (Default: no)
 GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-0}
 # Show banners (Default: yes)
@@ -164,6 +164,10 @@ if [ "$CURRENT_VER" = "${LINUX_VER}" ]; then
   fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed.\nProcess aborted${NORMAL}"
 fi
 
+versionToInt() {
+  echo "$@" | awk -F "." '{ printf("%03d%03d%03d", $1,$2,$3); }';
+}
+
 # BANNERS
 header_logo() {
   #header
@@ -225,6 +229,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
+  printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
@@ -286,6 +291,10 @@ while [[ $# -gt 0 ]]; do
       NPROC=$2
       shift
       shift
+      ;;
+    --enable-debug-info | -edi)
+      shift
+      ENABLE_DEBUG_INFO=1
       ;;
     --uninstall | -u)
       shift
@@ -738,7 +747,7 @@ install_kernel() {
       # Config
       log_debug "Phase 3 of 5: Configuration"
       printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}5${NORMAL}: Setup kernel"
-      #cp /boot/config-"$(uname -r)" .config
+      # cp /boot/config-"$(uname -r)" .config
       log_debug "Configuring..."
       if [ ! "$CONFIG_OPTION" = "olddefconfig" ]; then
         make "$CONFIG_OPTION"
@@ -746,9 +755,23 @@ install_kernel() {
         run_ok "make $CONFIG_OPTION" "Writing configuration..."
         log_success "Configuration finished"
       fi
-      if [ "$DISABLE_DEBUG_INFO" = "1" ]; then
-        #scripts/config --disable MODULE_SIG
-        scripts/config --disable DEBUG_INFO
+      read_sleep 1
+      # Disable debug info since it's enabled by default
+      if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
+
+        # DEBUG_INFO_NONE introduced in version 5.18
+        num1=$LINUX_VER # version to check if is greater than or equal to
+        num2=5.18 # required version
+
+        if [ "$(versionToInt $num1)" -ge "$(versionToInt $num2)" ]; then
+          # $num1 is greater than or equal to $num2
+          scripts/config --set-val DEBUG_INFO_NONE y
+          scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
+        else
+          # $num1 is lesser than $num2
+          scripts/config --set-val DEBUG_INFO n
+          scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
+        fi
       fi
       echo
       # Compilation
@@ -756,7 +779,7 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}5${NORMAL}: Kernel Compilation"
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
-      run_ok "time make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      run_ok "make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
       log_success "Compiling finished"
       echo
       # Installation
