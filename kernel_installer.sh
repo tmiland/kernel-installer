@@ -75,6 +75,8 @@ MAINLINE_VER=$(latest_kernel mainline)
 LONGTERM_VER=$(latest_kernel longterm)
 # Default kernel version without arguments
 LINUX_VER=${LINUX_VER:-$STABLE_VER}
+# Default linux version name
+LINUX_VER_NAME=Stable
 # Installed kernel
 CURRENT_VER=$(uname -r)
 # Default kexec option
