@@ -73,6 +73,7 @@ If called without arguments, installs stable kernel using /opt/linux
 --nproc                |-n          set the number of processing units to use
 --enable-debug-info    |-edi        enable debug info
 --lowlatency           |-low        convert generic config to lowlatency
+--changelog            |-cl         view changelog for kernel version
 --uninstall            |-u          uninstall kernel
 ```
 

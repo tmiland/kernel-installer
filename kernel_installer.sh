@@ -172,6 +172,10 @@ versionToInt() {
   echo "$@" | awk -F "." '{ printf("%03d%03d%03d", $1,$2,$3); }';
 }
 
+changelog() {
+  curl -s https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/ChangeLog-${LINUX_VER} | less
+}
+
 # BANNERS
 header_logo() {
   #header
@@ -235,6 +239,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
+  printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
@@ -304,6 +309,10 @@ while [[ $# -gt 0 ]]; do
     --lowlatency | -low)
       shift
       LOWLATENCY=1
+      ;;
+    --changelog | -cl)
+      changelog
+      exit 0
       ;;
     --uninstall | -u)
       shift
