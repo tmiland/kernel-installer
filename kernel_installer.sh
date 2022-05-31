@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086
+# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086,SC2046,SC2005
 
 ## Author: Tommy Miland (@tmiland) - Copyright (c) 2022
 
@@ -45,8 +45,11 @@ VERSION='1.2.1'
 #set -o xtrace
 # Get current directory
 CURRDIR=$(pwd)
+# Set update check
+UPDATE_SCRIPT=0
 # Get script filename
-SCRIPT_FILENAME=$(basename "$0")
+self=$(readlink -f "${BASH_SOURCE[0]}")
+SCRIPT_FILENAME=$(basename "$self")
 # Logfile
 LOGFILE=$CURRDIR/kernel_installer.log
 # Default processing units (all available)
@@ -205,6 +208,20 @@ header() {
   echo -e "${NORMAL}"
 }
 
+# Update banner
+show_update_banner () {
+  header
+  echo ""
+  echo "There is a newer version of ${SCRIPT_NAME} available."
+  #echo ""
+  echo ""
+  echo -e "${GREEN}${DONE} New version:${NORMAL} ${RELEASE_TAG} - ${RELEASE_TITLE}"
+  echo ""
+  echo -e "${YELLOW}${ARROW} Notes:${NORMAL}\n"
+  echo -e "${BLUE}${RELEASE_NOTE}${NORMAL}"
+  echo ""
+}
+
 # Exit Script
 exit_script() {
   header_logo
@@ -217,6 +234,96 @@ exit_script() {
   echo -e "Documentation for this script is available here: ${YELLOW}\n${ARROW} https://github.com/${REPO_NAME}${NORMAL}\n"
   echo -e "${YELLOW}${ARROW} Goodbye.${NORMAL} ☺"
   echo ""
+}
+
+##
+# Returns the version number of ${SCRIPT_NAME} file on line 14
+##
+get_updater_version () {
+  echo $(sed -n '14 s/[^0-9.]*\([0-9.]*\).*/\1/p' "$1")
+}
+
+# Update script
+# Default: Do not check for update
+update_updater () {
+  # Download files
+  download_file () {
+    declare -r url=$1
+    declare -r tf=$(mktemp)
+    local dlcmd=''
+    dlcmd="wget -O $tf"
+    $dlcmd "${url}" &>/dev/null && echo "$tf" || echo '' # return the temp-filename (or empty string on error)
+  }
+  # Open files
+  open_file () { #expects one argument: file_path
+
+    if [ "$(uname)" == 'Darwin' ]; then
+      open "$1"
+    elif [ "$(cut $(uname -s) 1 5)" == "Linux" ]; then
+      xdg-open "$1"
+    else
+      echo -e "${RED}${ERROR} Error: Sorry, opening files is not supported for your OS.${NC}"
+    fi
+  }
+  # Get latest release tag from GitHub
+  get_latest_release_tag() {
+    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+    grep '"tag_name":' |
+    sed -n 's/[^0-9.]*\([0-9.]*\).*/\1/p'
+  }
+
+  RELEASE_TAG=$(get_latest_release_tag ${REPO_NAME})
+
+  # Get latest release download url
+  get_latest_release() {
+    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+    grep '"browser_download_url":' |
+    sed -n 's#.*\(https*://[^"]*\).*#\1#;p'
+  }
+
+  LATEST_RELEASE=$(get_latest_release ${REPO_NAME})
+
+  # Get latest release notes
+  get_latest_release_note() {
+    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+    grep '"body":' |
+    sed -n 's/.*"\([^"]*\)".*/\1/;p'
+  }
+
+  RELEASE_NOTE=$(get_latest_release_note ${REPO_NAME})
+
+  # Get latest release title
+  get_latest_release_title() {
+    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+    grep -m 1 '"name":' |
+    sed -n 's/.*"\([^"]*\)".*/\1/;p'
+  }
+
+  RELEASE_TITLE=$(get_latest_release_title ${REPO_NAME})
+
+  echo -e "${GREEN}${ARROW} Checking for updates...${NORMAL}"
+  # Get tmpfile from github
+  declare -r tmpfile=$(download_file "$LATEST_RELEASE")
+  if [[ $(get_updater_version "${CURRDIR}/$SCRIPT_FILENAME") < "${RELEASE_TAG}" ]]; then
+    if [ $UPDATE_SCRIPT = "1" ]; then
+      show_update_banner
+      echo -e "${RED}${ARROW} Do you want to update [Y/N?]${NORMAL}"
+      read -p "" -n 1 -r
+      echo -e "\n\n"
+      if [[ $REPLY =~ ^[Yy]$ ]]; then
+        mv "${tmpfile}" "${CURRDIR}/${SCRIPT_FILENAME}"
+        chmod u+x "${CURRDIR}/${SCRIPT_FILENAME}"
+        "${CURRDIR}/${SCRIPT_FILENAME}" "$@" -d
+        exit 1 # Update available, user chooses to update
+      fi
+      if [[ $REPLY =~ ^[Nn]$ ]]; then
+        return 1 # Update available, but user chooses not to update
+      fi
+    fi
+  else
+    echo -e "${GREEN}${DONE} No update available.${NORMAL}"
+    return 0 # No update available
+  fi
 }
 
 usage() {
@@ -240,6 +347,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
   printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
+  printf "%s\\n" "  ${YELLOW}--update               |-upd${NORMAL} check for script update"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
@@ -312,6 +420,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --changelog | -cl)
       changelog
+      exit 0
+      ;;
+    --update | -upd)
+      UPDATE_SCRIPT=1
+      update_updater "$@"
       exit 0
       ;;
     --uninstall | -u)
