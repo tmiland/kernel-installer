@@ -166,10 +166,12 @@ chk_permissions() {
   fi
 }
 
-# Check if kernel is installed, abort if same version is found
-if [ "$CURRENT_VER" = "${LINUX_VER}" ]; then
-  fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed.\nProcess aborted${NORMAL}"
-fi
+chk_kernel() {
+  # Check if kernel is installed, abort if same version is found
+  if [ "$CURRENT_VER" = "${LINUX_VER}" ]; then
+    fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed. Process aborted${NORMAL}"
+  fi
+}
 
 versionToInt() {
   echo "$@" | awk -F "." '{ printf("%03d%03d%03d", $1,$2,$3); }';
@@ -444,6 +446,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+chk_kernel
 
 # Start with a clean log
 if [[ -f $LOGFILE ]]; then
