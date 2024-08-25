@@ -844,8 +844,8 @@ install_kernel() {
   if [ -d "$INSTALL_DIR" ]; then
     #(
     #cd "$INSTALL_DIR"/linux || exit
-    # log_debug "Deleting old Linux source code files in $INSTALL_DIR/linux"
-    # rm -rf "$INSTALL_DIR"/linux/*
+    log_debug "Deleting old Linux source code files in $INSTALL_DIR"
+    rm -rf "$INSTALL_DIR" && mkdir -p "$INSTALL_DIR"
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
     if [ ! $LINUX_VER_NAME = "Mainline" ]; then
