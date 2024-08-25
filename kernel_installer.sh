@@ -807,10 +807,10 @@ install_kernel() {
   echo
   log_info "${CYANBG}Installing The Linux Kernel version:${NORMAL} $LINUX_VER_NAME: ${YELLOW}$LINUX_VER${NORMAL}"
   echo
-  printf "%s \\n" "${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}1${NORMAL} of ${GREEN}5${NORMAL}: Setup packages"
+  printf "%s \\n" "${YELLOW}▣${CYAN}□□□□□${NORMAL} Phase ${YELLOW}1${NORMAL} of ${GREEN}6${NORMAL}: Setup packages"
   # Setup Dependencies
   log_debug "Configuring package manager for ${DISTRO_GROUP} .."
-  if ! ${PKGCHK} "$INSTALL_PKGS" 1>/dev/null 2>&1; then
+  if ! ${PKGCHK} $INSTALL_PKGS 1>/dev/null 2>&1; then
     log_debug "Updating packages"
     run_ok "${UPDATE}" "Updating package repo..."
     for i in $INSTALL_PKGS; do
@@ -837,7 +837,7 @@ install_kernel() {
   echo
   # Download Linux source code
   log_debug "Phase 2 of 5: Linux source code download"
-  printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}5${NORMAL}: Download Linux source code"
+  printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}6${NORMAL}: Download Linux source code"
   if [ ! -d "$INSTALL_DIR" ]; then
     mkdir "$INSTALL_DIR" 1>/dev/null 2>&1
   fi
@@ -861,16 +861,22 @@ install_kernel() {
       fi
     else
       # Kernel url 2 (Mainline)
-      kernel_url=https://git.kernel.org/torvalds/t/linux-"${LINUX_VER}".tar.gz
+      kernel_url=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/snapshot/linux-"${LINUX_VER}".tar.gz
       file_ext=gz
     fi
     if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
       if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
+        log_debug "Downloading Linux source code"
         run_ok "wget -c $kernel_url" "Downloading..."
+        log_success "Download finished"
       fi
     fi
+    echo
+    # Unpacking
+    log_debug "Phase 3 of 5: Linux source code Unpacking"
+    printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}6${NORMAL}: Unpacking Linux source code"
     log_debug "Unpacking Linux source code"
-    tar xvf linux-"${LINUX_VER}".tar.$file_ext >>"${RUN_LOG}" 2>&1
+    run_ok "tar xvf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..." #>>"${RUN_LOG}" 2>&1
     log_success "Unpacking finished"
     #)
   fi
@@ -880,8 +886,8 @@ install_kernel() {
       cd "$INSTALL_DIR"/linux-"${LINUX_VER}" || exit 1
       echo
       # Config
-      log_debug "Phase 3 of 5: Configuration"
-      printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}5${NORMAL}: Setup kernel"
+      log_debug "Phase 4 of 5: Configuration"
+      printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
       # cp /boot/config-"$(uname -r)" .config
       log_debug "Configuring..."
       if [ ! "$CONFIG_OPTION" = "olddefconfig" ]; then
@@ -924,16 +930,16 @@ install_kernel() {
       fi
       echo
       # Compilation
-      log_debug "Phase 4 of 5: Compilation"
-      printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}5${NORMAL}: Kernel Compilation"
+      log_debug "Phase 5 of 6: Compilation"
+      printf "%s \\n" "${GREEN}▣▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}5${NORMAL} of ${GREEN}6${NORMAL}: Kernel Compilation"
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
       run_ok "make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
       log_success "Compiling finished"
       echo
       # Installation
-      log_debug "Phase 5 of 5: Installation"
-      printf "%s \\n" "${GREEN}▣▣▣▣${YELLOW}▣${NORMAL} Phase ${YELLOW}5${NORMAL} of ${GREEN}5${NORMAL}: Kernel Installation"
+      log_debug "Phase 6 of 6: Installation"
+      printf "%s \\n" "${GREEN}▣▣▣▣▣${YELLOW}▣${NORMAL} Phase ${YELLOW}6${NORMAL} of ${GREEN}6${NORMAL}: Kernel Installation"
       cd - 1>/dev/null 2>&1 || exit 1
     )
   fi
@@ -973,7 +979,7 @@ install_kernel() {
   # fi
   echo
   # Cleanup
-  printf "%s \\n" "${GREEN}▣▣▣▣▣${NORMAL} Cleaning up"
+  printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} Cleaning up"
   if [ "$INSTALL_DIR" != "" ] && [ "$INSTALL_DIR" != "/" ]; then
     log_debug "Cleaning up temporary files in $INSTALL_DIR."
     find "$INSTALL_DIR" -delete
@@ -983,7 +989,7 @@ install_kernel() {
 
   # Make sure the cursor is back (if spinners misbehaved)
   tput cnorm
-  printf "%s \\n" "${GREEN}▣▣▣▣▣${NORMAL} All ${GREEN}5${NORMAL} phases finished successfully"
+  printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} All ${GREEN}6${NORMAL} phases finished successfully"
 
   if [ "$KEXEC" = "1" ]; then
     # Load the new kernel without reboot
@@ -998,7 +1004,6 @@ chk_permissions
 if [ "$mode" = "uninstall" ]; then
   if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-headers-"${LINUX_VER}"
-    exit
   elif dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-image-"${LINUX_VER}"
   fi
