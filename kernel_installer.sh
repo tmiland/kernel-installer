@@ -996,7 +996,12 @@ install_kernel() {
 chk_permissions
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
-  apt remove linux-{image,headers}-"${LINUX_VER}"
+  if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
+    apt purge linux-headers-"${LINUX_VER}"
+    exit
+  elif dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
+    apt purge linux-image-"${LINUX_VER}"
+  fi
   exit
 fi
 
