@@ -867,7 +867,7 @@ install_kernel() {
     if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
       if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
         log_debug "Downloading Linux source code"
-        run_ok "wget -c $kernel_url" "Downloading..."
+        run_ok "wget --no-check-certificate -c $kernel_url" "Downloading..."
         log_success "Download finished"
       fi
     fi
