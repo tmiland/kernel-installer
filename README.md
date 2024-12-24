@@ -189,12 +189,6 @@ Tested and working on: Debian 11
 - [PayPal me](https://paypal.me/milandtommy)
 - [BTC] : 33mjmoPxqfXnWNsvy8gvMZrrcG3gEa3YDM
 
-## Web Hosting
-
-Sign up for web hosting using this link, and receive $100 in credit over 60 days.
-
-[DigitalOcean](https://m.do.co/c/f1f2b475fca0)
-
 #### Disclaimer 
 
 *** ***Use at own risk*** ***
