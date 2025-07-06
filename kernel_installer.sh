@@ -809,6 +809,7 @@ install_kernel() {
   echo
   printf "%s \\n" "${YELLOW}▣${CYAN}□□□□□${NORMAL} Phase ${YELLOW}1${NORMAL} of ${GREEN}6${NORMAL}: Setup packages"
   # Setup Dependencies
+  log_debug "Phase 1 of 6: Dependencies setup"
   log_debug "Configuring package manager for ${DISTRO_GROUP} .."
   if ! ${PKGCHK} $INSTALL_PKGS 1>/dev/null 2>&1; then
     log_debug "Updating packages"
@@ -836,7 +837,7 @@ install_kernel() {
   read_sleep 1
   echo
   # Download Linux source code
-  log_debug "Phase 2 of 5: Linux source code download"
+  log_debug "Phase 2 of 6: Linux source code download"
   printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}6${NORMAL}: Download Linux source code"
   if [ ! -d "$INSTALL_DIR" ]; then
     mkdir "$INSTALL_DIR" 1>/dev/null 2>&1
@@ -873,7 +874,7 @@ install_kernel() {
     fi
     echo
     # Unpacking
-    log_debug "Phase 3 of 5: Linux source code Unpacking"
+    log_debug "Phase 3 of 6: Linux source code Unpacking"
     printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}6${NORMAL}: Unpacking Linux source code"
     log_debug "Unpacking Linux source code"
     run_ok "tar xvf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..." #>>"${RUN_LOG}" 2>&1
@@ -886,7 +887,7 @@ install_kernel() {
       cd "$INSTALL_DIR"/linux-"${LINUX_VER}" || exit 1
       echo
       # Config
-      log_debug "Phase 4 of 5: Configuration"
+      log_debug "Phase 4 of 6: Configuration"
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
       # cp /boot/config-"$(uname -r)" .config
       log_debug "Configuring..."
