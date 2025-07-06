@@ -84,8 +84,6 @@ LINUX_VER_NAME=Stable
 CURRENT_VER=$(uname -r)
 # Default kexec option
 KEXEC=${KEXEC:-0}
-# root
-root=$(id | grep -i "uid=0(" >/dev/null)
 # Repo name for this script
 REPO_NAME="tmiland/kernel-installer"
 # Functions url
@@ -161,7 +159,7 @@ read_sleep() {
 # Make sure that the script runs with root permissions
 chk_permissions() {
   # Only root can run this
-  if [ "$root" = "0" ]; then
+  if [[ "$EUID" != 0 ]]; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_NAME} script must be run as root"
   fi
 }
