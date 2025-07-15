@@ -1025,7 +1025,8 @@ chk_permissions
 if [ "$mode" = "uninstall" ]; then
   if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-headers-"${LINUX_VER}"
-  elif dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
+  fi
+  if dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-image-"${LINUX_VER}"
   fi
   exit
