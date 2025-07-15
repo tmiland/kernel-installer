@@ -346,9 +346,10 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
+  printf "%s\\n" "  ${YELLOW}--zstd                 |-z${NORMAL}   enable zstd compression for zram (disabled in 6.12)"
   printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
   printf "%s\\n" "  ${YELLOW}--update               |-upd${NORMAL} check for script update"
-  printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel"
+  printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel (use with -k option)"
   echo
   printf "%s\\n" "  Installed kernel version: ${YELLOW}${CURRENT_VER}${NORMAL}  | Script version: ${CYAN}${VERSION}${NORMAL}"
   echo
@@ -417,6 +418,14 @@ while [[ $# -gt 0 ]]; do
     --lowlatency | -low)
       shift
       LOWLATENCY=1
+      ;;
+    --zstd | -z)
+      shift
+      ZSTD=1
+      ;;
+    --list-installed | -li)
+      shift
+      LIST_INSTALLED=1
       ;;
     --changelog | -cl)
       changelog
@@ -927,6 +936,19 @@ install_kernel() {
         scripts/config --disable PREEMPT_VOLUNTARY
         scripts/config --set-val TEST_DIV64 m
       fi
+      if [ "$ZSTD" = "1" ]; then
+        # enable zstd config
+        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172#19
+        scripts/config --enable CONFIG_ZRAM_BACKEND_ZSTD
+        scripts/config --enable CONFIG_ZRAM_DEF_COMP_ZSTD
+        scripts/config --disable CONFIG_ZRAM_BACKEND_FORCE_LZO
+      fi
+      # enable zram backend
+      scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4HC
+      scripts/config --enable CONFIG_ZRAM_BACKEND_DEFLATE
+      scripts/config --enable CONFIG_ZRAM_BACKEND_842
+      scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4
+      scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -1006,6 +1028,11 @@ if [ "$mode" = "uninstall" ]; then
   elif dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-image-"${LINUX_VER}"
   fi
+  exit
+fi
+
+if [ $LIST_INSTALLED == "1" ]; then
+  dpkg --list | egrep -i --color 'linux-image|linux-headers|linux-modules' | awk '{ print $2 }'
   exit
 fi
 
