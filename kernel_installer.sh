@@ -924,7 +924,6 @@ install_kernel() {
       fi
       if [ "$LOWLATENCY" = "1" ]; then
         # convert generic config to lowlatency
-
         scripts/config --disable COMEDI_TESTS_EXAMPLE
         scripts/config --disable COMEDI_TESTS_NI_ROUTES
         scripts/config --set-val CONFIG_HZ 1000
@@ -937,18 +936,12 @@ install_kernel() {
         scripts/config --set-val TEST_DIV64 m
       fi
       if [ "$ZSTD" = "1" ]; then
-        # enable zstd config
+        # zram
         # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172#19
         scripts/config --enable CONFIG_ZRAM_BACKEND_ZSTD
-        scripts/config --enable CONFIG_ZRAM_DEF_COMP_ZSTD
         scripts/config --disable CONFIG_ZRAM_BACKEND_FORCE_LZO
+        scripts/config --enable CONFIG_ZRAM_DEF_COMP_ZSTD
       fi
-      # enable zram backend
-      scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4HC
-      scripts/config --enable CONFIG_ZRAM_BACKEND_DEFLATE
-      scripts/config --enable CONFIG_ZRAM_BACKEND_842
-      scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4
-      scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
