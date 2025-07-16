@@ -84,6 +84,10 @@ LINUX_VER_NAME=Stable
 CURRENT_VER=$(uname -r)
 # Default kexec option
 KEXEC=${KEXEC:-0}
+# Default compression - zstd
+DEFAULT_COMPRESSION=${DEFAULT_COMPRESSION:-zstd}
+DEF_COM=${DEF_COM:-ZSTD}
+DEF_COM_NUM=${DEF_COM_NUM:-5}
 # Repo name for this script
 REPO_NAME="tmiland/kernel-installer"
 # Functions url
@@ -352,6 +356,8 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
+  printf "%s\\n" "  ${YELLOW}--list-installed       |-li${NORMAL}  list installed kernels"
+  printf "%s\\n" "  ${YELLOW}--default-compression  |-cp${NORMAL}  select default compression algorithm"
   printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
   printf "%s\\n" "  ${YELLOW}--update               |-upd${NORMAL} check for script update"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel (use with -k option)"
@@ -427,6 +433,10 @@ while [[ $# -gt 0 ]]; do
     --list-installed | -li)
       shift
       LIST_INSTALLED=1
+      ;;
+    --default-compression | -cp)
+      shift
+      DEFAULT_COMPRESSION="$1"
       ;;
     --changelog | -cl)
       changelog
@@ -584,6 +594,41 @@ else
   echo -e "${RED}${BALLOT_X} Error: Sorry, your OS is not supported.${NORMAL}"
   exit 1;
 fi
+
+case "$DEFAULT_COMPRESSION" in
+  lzo-rle)
+    DEF_COM_NUM=1
+    DEF_COM=LZORLE
+  ;;
+  lzo)
+    DEF_COM_NUM=2
+    DEF_COM=LZO
+  ;;
+  lz4)
+    DEF_COM_NUM=3
+    DEF_COM=LZ4
+  ;;
+  lz4hc)
+    DEF_COM_NUM=4
+    DEF_COM=LZ4HC
+  ;;
+  zstd)
+    DEF_COM_NUM=5
+    DEF_COM=ZSTD
+  ;;
+  deflate)
+    DEF_COM_NUM=6
+    DEF_COM=DEFLATE
+  ;;
+  842)
+    DEF_COM_NUM=7
+    DEF_COM=842
+  ;;
+  *)
+  echo -e "${RED}${BALLOT_X} Error: Enter lzo-rle, lzo, lz4, lz4hc, zstd, deflate or 842 as argument.${NORMAL}"
+  exit 1;
+  ;;
+esac
 
 get_verified_tarball() {
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
@@ -945,9 +990,9 @@ install_kernel() {
         scripts/config --disable CONFIG_ZRAM_BACKEND_FORCE_LZO
         # Disable default lzorle
         scripts/config --disable CONFIG_ZRAM_DEF_COMP_LZORLE
-        # Set default zram comp to zstd
-        scripts/config --enable CONFIG_ZRAM_DEF_COMP_ZSTD
-        scripts/config --set-str CONFIG_ZRAM_DEF_COMP "zstd"
+        # Set default zram comp
+        scripts/config --enable CONFIG_ZRAM_DEF_COMP_$DEF_COM
+        scripts/config --set-str CONFIG_ZRAM_DEF_COMP "$DEFAULT_COMPRESSION"
         # Enable optional algorithms
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4HC
@@ -962,7 +1007,7 @@ install_kernel() {
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
       # Add echo 5 to answer Default zram compressor as zstd
-      run_ok "echo 5 | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      run_ok "echo $DEF_COM_NUM | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
       log_success "Compiling finished"
       echo
       # Installation

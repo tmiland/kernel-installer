@@ -22,6 +22,23 @@ wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc 
 
 - This script reverts bug #1086172 [Enable more ZRAM compression options by default](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172)
   - Sets default compression to zstd, and enables support for the rest of the algorithms
+  - Options are:
+```bash
+lz4 compression support (ZRAM_BACKEND_LZ4) [Y/n/?] y
+lz4hc compression support (ZRAM_BACKEND_LZ4HC) [Y/n/?] y
+zstd compression support (ZRAM_BACKEND_ZSTD) [Y/n/?] y
+deflate compression support (ZRAM_BACKEND_DEFLATE) [Y/n/?] y
+842 compression support (ZRAM_BACKEND_842) [Y/n/?] y
+lzo and lzo-rle compression support (ZRAM_BACKEND_LZO) [Y/n/?] y
+Default zram compressor
+  1. lzo-rle (ZRAM_DEF_COMP_LZORLE)
+  2. lzo (ZRAM_DEF_COMP_LZO)
+  3. lz4 (ZRAM_DEF_COMP_LZ4) (NEW)
+  4. lz4hc (ZRAM_DEF_COMP_LZ4HC) (NEW)
+> 5. zstd (ZRAM_DEF_COMP_ZSTD)
+  6. deflate (ZRAM_DEF_COMP_DEFLATE) (NEW)
+  7. 842 (ZRAM_DEF_COMP_842) (NEW)
+```
 
 ### Download the script
 
@@ -65,22 +82,24 @@ For usage, run:
 ```bash
 If called without arguments, installs stable kernel using /opt/linux
 
---help                 |-h          display this help and exit
---kernel               |-k          kernel version of choice
---stable               |-s          stable kernel version 5.18
---mainline             |-m          mainline kernel version 5.18
---longterm             |-l          longterm kernel version 5.15.41
---dir                  |-d          install directory
---kexec                |-x          load new kernel without reboot
---config               |-c          set configuration target
---verbose              |-v          increase verbosity
---get-verified-tarball |-gvt        cryptographically verify kernel tarball
---nproc                |-n          set the number of processing units to use
---enable-debug-info    |-edi        enable debug info
---lowlatency           |-low        convert generic config to lowlatency
---changelog            |-cl         view changelog for kernel version
---update               |-upd        check for script update
---uninstall            |-u          uninstall kernel
+--help                 |-h   display this help and exit
+--kernel               |-k   kernel version of choice
+--stable               |-s   stable kernel version 6.15.6
+--mainline             |-m   mainline kernel version 6.16-rc6
+--longterm             |-l   longterm kernel version 6.12.38
+--dir                  |-d   install directory
+--kexec                |-x   load new kernel without reboot
+--config               |-c   set configuration target
+--verbose              |-v   increase verbosity
+--get-verified-tarball |-gvt cryptographically verify kernel tarball
+--nproc                |-n   set the number of processing units to use
+--enable-debug-info    |-edi enable debug info
+--lowlatency           |-low convert generic config to lowlatency
+--list-installed       |-li  list installed kernels
+--default-compression  |-cp  select default compression algorithm
+--changelog            |-cl  view changelog for kernel version
+--update               |-upd check for script update
+--uninstall            |-u   uninstall kernel (use with -k option)
 ```
 
 To use opt --kernel:
