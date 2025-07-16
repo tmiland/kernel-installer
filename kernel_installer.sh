@@ -357,7 +357,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
   printf "%s\\n" "  ${YELLOW}--list-installed       |-li${NORMAL}  list installed kernels"
-  printf "%s\\n" "  ${YELLOW}--default-compression  |-cp${NORMAL}  select default compression algorithm"
+  printf "%s\\n" "  ${YELLOW}--default-compression  |-dc${NORMAL}  select default compression algorithm"
   printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
   printf "%s\\n" "  ${YELLOW}--update               |-upd${NORMAL} check for script update"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel (use with -k option)"
@@ -434,7 +434,7 @@ while [[ $# -gt 0 ]]; do
       shift
       LIST_INSTALLED=1
       ;;
-    --default-compression | -cp)
+    --default-compression | -dc)
       shift
       DEFAULT_COMPRESSION="$1"
       ;;
