@@ -18,7 +18,12 @@ Will be installed when running script.
 wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc liblz4-tool paxctl libelf-dev flex bison
 ```
 
-### Download the script:
+### Notes
+
+- This script reverts bug #1086172 [Enable more ZRAM compression options by default](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172)
+  - Sets default compression to zstd, and enables support for the rest of the algorithms
+
+### Download the script
 
 Quick install with default options:
 
@@ -55,7 +60,7 @@ For usage, run:
 ./kernel_installer.sh -h
 ```
 
-### Help output:
+### Help output
 
 ```bash
 If called without arguments, installs stable kernel using /opt/linux
@@ -100,7 +105,7 @@ To use --config:
 ```
 default is `olddefconfig`
 
-### Configuration targets:
+### Configuration targets
 
 ```bash
 config          - Update current config utilising a line-oriented program
@@ -176,7 +181,7 @@ To uninstall previously installed kernel:
 
 ## Testing
 
-Tested and working on: Debian 11
+Tested and working on: Debian 12
 
 - See [kernel_installer.log](https://raw.githubusercontent.com/tmiland/kernel-installer/main/log/kernel_installer.log)
 

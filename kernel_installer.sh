@@ -51,7 +51,7 @@ UPDATE_SCRIPT=0
 self=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_FILENAME=$(basename "$self")
 # Logfile
-LOGFILE=$CURRDIR/kernel_installer.log
+LOGFILE=/var/log/kernel_installer.log
 # Default processing units (all available)
 NPROC=$(nproc)
 # Console output level; ignore debug level messages.
@@ -167,7 +167,13 @@ chk_permissions() {
 chk_kernel() {
   # Check if kernel is installed, abort if same version is found
   if [ "$CURRENT_VER" = "${LINUX_VER}" ]; then
-    fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed. Process aborted${NORMAL}"
+    echo
+    read -rp "${YELLOW}Linux kernel $CURRENT_VER is already installed, install anyways?${NORMAL} [y/n]: " -e YESNO
+    if [ $YESNO == "y" ]; then
+      return
+    else
+      fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed. Process aborted${NORMAL}"
+    fi
   fi
 }
 
@@ -346,7 +352,6 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
-  printf "%s\\n" "  ${YELLOW}--zstd                 |-z${NORMAL}   enable zstd compression for zram (disabled in 6.12)"
   printf "%s\\n" "  ${YELLOW}--changelog            |-cl${NORMAL}  view changelog for kernel version"
   printf "%s\\n" "  ${YELLOW}--update               |-upd${NORMAL} check for script update"
   printf "%s\\n" "  ${YELLOW}--uninstall            |-u${NORMAL}   uninstall kernel (use with -k option)"
@@ -418,10 +423,6 @@ while [[ $# -gt 0 ]]; do
     --lowlatency | -low)
       shift
       LOWLATENCY=1
-      ;;
-    --zstd | -z)
-      shift
-      ZSTD=1
       ;;
     --list-installed | -li)
       shift
@@ -907,11 +908,9 @@ install_kernel() {
       read_sleep 1
       # Disable debug info since it's enabled by default
       if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
-
         # DEBUG_INFO_NONE introduced in version 5.18
         num1=$LINUX_VER # version to check if is greater than or equal to
         num2=5.18 # required version
-
         if [ "$(versionToInt $num1)" -ge "$(versionToInt $num2)" ]; then
           # $num1 is greater than or equal to $num2
           scripts/config --set-val DEBUG_INFO_NONE y
@@ -935,12 +934,26 @@ install_kernel() {
         scripts/config --disable PREEMPT_VOLUNTARY
         scripts/config --set-val TEST_DIV64 m
       fi
-      if [ "$ZSTD" = "1" ]; then
-        # zram
+      # Revert zstd changes from 6.12
+      VER1=$LINUX_VER # version to check if is greater than or equal to
+      VER2=6.12 # required version
+      if [ "$(versionToInt $VER1)" -ge "$(versionToInt $VER2)" ]; then
+        # enable zstd
         # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172#19
         scripts/config --enable CONFIG_ZRAM_BACKEND_ZSTD
+        # Disable forced compression
         scripts/config --disable CONFIG_ZRAM_BACKEND_FORCE_LZO
+        # Disable default lzorle
+        scripts/config --disable CONFIG_ZRAM_DEF_COMP_LZORLE
+        # Set default zram comp to zstd
         scripts/config --enable CONFIG_ZRAM_DEF_COMP_ZSTD
+        scripts/config --set-str CONFIG_ZRAM_DEF_COMP "zstd"
+        # Enable optional algorithms
+        scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4
+        scripts/config --enable CONFIG_ZRAM_BACKEND_LZ4HC
+        scripts/config --enable CONFIG_ZRAM_BACKEND_DEFLATE
+        scripts/config --enable CONFIG_ZRAM_BACKEND_842
+        scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
       echo
       # Compilation
@@ -948,7 +961,8 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣▣${YELLOW}▣${CYAN}□${NORMAL} Phase ${YELLOW}5${NORMAL} of ${GREEN}6${NORMAL}: Kernel Compilation"
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
-      run_ok "make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      # Add echo 5 to answer Default zram compressor as zstd
+      run_ok "echo 5 | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
       log_success "Compiling finished"
       echo
       # Installation
