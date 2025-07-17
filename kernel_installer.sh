@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086,SC2046,SC2005
+# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086,SC2046,SC2005,SC2317
 
 ## Author: Tommy Miland (@tmiland) - Copyright (c) 2022
 
@@ -1085,7 +1085,7 @@ if [ "$mode" = "uninstall" ]; then
 fi
 
 if [ $LIST_INSTALLED == "1" ]; then
-  dpkg --list | egrep -i --color 'linux-image|linux-headers|linux-modules' | awk '{ print $2 }'
+  dpkg --list | grep -Ei 'linux-image|linux-headers|linux-modules' | awk '{ print $2 }'
   exit
 fi
 
