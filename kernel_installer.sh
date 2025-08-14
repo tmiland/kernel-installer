@@ -65,7 +65,7 @@ GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-0}
 # Show banners (Default: yes)
 BANNERS=1
 # Default Install dir (Default: /opt/linux)
-INSTALL_DIR=${INSTALL_DIR:-/opt/linux}
+INSTALL_DIR=${INSTALL_DIR:-/opt/linux-kernel}
 # https://stackoverflow.com/a/51068988
 latest_kernel() {
   curl -s https://www.kernel.org/finger_banner | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
@@ -404,7 +404,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --dir | -d) # Bash Space-Separated (e.g., --option argument)
-      INSTALL_DIR="$2" # Source: https://stackoverflow.com/a/14203146
+      INSTALL_DIR="$2"/linux-kernel # Source: https://stackoverflow.com/a/14203146
       shift # past argument
       shift # past value
       ;;
