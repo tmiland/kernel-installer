@@ -554,7 +554,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   PKGCHK="dpkg -s"
   #BUILD_DEP="apt-get -o Dpkg::Progress-Fancy="1" build-dep -qq"
   # Install packages
-  INSTALL_PKGS="wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc liblz4-tool paxctl libelf-dev flex bison debhelper apt-transport-https"
+  INSTALL_PKGS="wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc liblz4-tool paxctl libelf-dev flex bison debhelper apt-transport-https libdw-dev"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
