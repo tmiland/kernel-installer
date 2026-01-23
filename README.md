@@ -90,6 +90,7 @@ If called without arguments, installs stable kernel using /opt/linux
 --dir                  |-d   install directory
 --kexec                |-x   load new kernel without reboot
 --config               |-c   set configuration target
+--custom-config        |-cc  set custom configuration directive, can be used multiple times
 --verbose              |-v   increase verbosity
 --get-verified-tarball |-gvt cryptographically verify kernel tarball
 --nproc                |-n   set the number of processing units to use
@@ -147,6 +148,18 @@ listnewconfig   - List new options
 olddefconfig    - Same as silentoldconfig but sets new symbols to their default value
 kvmconfig       - Enable additional options for guest kernel support
 tinyconfig      - Configure the tiniest possible kernel
+```
+
+### Custom configuration directives
+
+In order to enable specific kernel configs, one can use `--custom-config` like the following example:
+```
+./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m"
+```
+
+Note that `--custom-config can be used multiple times like:
+```
+./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m" --custom-config "scripts/config --set-val CONFIG_KERNEL_ZSTD y"
 ```
 
 To use --get-verified-tarball:
