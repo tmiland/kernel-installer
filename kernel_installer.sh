@@ -11,7 +11,7 @@
 ######################################################################
 
 
-VERSION='1.2.5'
+VERSION='1.2.6-dev'
 
 #------------------------------------------------------------------------------#
 #
@@ -351,6 +351,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--dir                  |-d${NORMAL}   install directory"
   printf "%s\\n" "  ${YELLOW}--kexec                |-x${NORMAL}   load new kernel without reboot"
   printf "%s\\n" "  ${YELLOW}--config               |-c${NORMAL}   set configuration target"
+  printf "%s\\n" "  ${YELLOW}--custom-config        |-cc${NORMAL}  set custom configuration directive, can be used multiple times"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -367,6 +368,7 @@ usage() {
 }
 
 POSITIONAL_ARGS=()
+CUSTOM_CONFIG_OPTIONS=()
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -410,6 +412,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --config | -c)
       CONFIG_OPTION="$2"
+      shift
+      shift
+      ;;
+    --custom-config | -cc)
+      CUSTOM_CONFIG_OPTIONS+=("$2")
       shift
       shift
       ;;
@@ -466,6 +473,13 @@ done
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 chk_kernel
+
+if [ -n "$CUSTOM_CONFIG_OPTIONS" ]; then
+  SANITIZED_CUSTOM_CONFIG_OPTIONS=()
+  for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
+    SANITIZED_CUSTOM_CONFIG_OPTIONS+=("$(echo "$custom_config_option")")
+  done
+fi
 
 # Start with a clean log
 if [[ -f $LOGFILE ]]; then
@@ -1000,6 +1014,10 @@ install_kernel() {
         scripts/config --enable CONFIG_ZRAM_BACKEND_842
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
+      for custom_config_option in "${SANITIZED_CUSTOM_CONFIG_OPTIONS[@]}"; do
+        log_debug "Adding custom config option: \"$custom_config_option\""
+        eval "$custom_config_option"
+      done
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
