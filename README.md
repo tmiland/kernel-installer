@@ -189,6 +189,8 @@ Then:
 su root
 ```
 
+
+**Full write-up on the blog:** https://tmiland.com/kernel-installer/
 ## Uninstall kernel
 
 To uninstall previously installed kernel:
