@@ -674,7 +674,9 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Package names are tracked against Debian 12/13 and Ubuntu 22.04/24.04:
   # "ncurses-dev" and "liblz4-tool" are transitional aliases that no longer
   # resolve on newer releases, and "paxctl" was removed from the archive.
-  INSTALL_PKGS="wget curl git rsync fakeroot build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison debhelper dpkg-dev procps apt-transport-https libdw-dev"
+  # cpio/kmod are required by the kernel's Build-Depends-Arch (mkdebian),
+  # enforced by dpkg-checkbuilddeps during `make bindeb-pkg`.
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison debhelper dpkg-dev procps apt-transport-https libdw-dev"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
