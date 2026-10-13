@@ -636,7 +636,7 @@ if [[ $DISTRO_GROUP != "RHEL" ]] && ! lsb_release -si 1>/dev/null 2>&1; then
   case $ANSWER in
     [Yy]* )
       echo -e "${GREEN}${ARROW} Installing ${LSB} on ${DISTRO}...${NORMAL}"
-      su -s "$(which bash)" -c "${PKGCMD} ${LSB}" || echo -e "${RED}${BALLOT_X} Error: could not install ${LSB}!${NORMAL}"
+      su -s "$(command -v bash)" -c "${PKGCMD} ${LSB}" || echo -e "${RED}${BALLOT_X} Error: could not install ${LSB}!${NORMAL}"
       echo -e "${GREEN}${CHECK} Done${NORMAL}"
       read_sleep 3
       #indexit
@@ -699,7 +699,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # rpmbuild during `make binrpm-pkg`), rpm-build provides rpmbuild,
     # dracut/grubby let the kernel rpm scriptlets create the initramfs and
     # boot entry at install time.
-    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils which diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
