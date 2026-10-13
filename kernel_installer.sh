@@ -1171,6 +1171,11 @@ install_kernel() {
   # Install through the package manager so that runtime dependencies of the
   # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
   # minimal systems, where a plain "dpkg -i" would fail.
+  if ! compgen -G "./linux-headers-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null ||
+    ! compgen -G "./linux-image-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null; then
+    log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
+    exit 1
+  fi
   run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
   run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
   log_success "Installation finished"
