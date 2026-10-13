@@ -97,8 +97,15 @@ DEF_COM=${DEF_COM:-ZSTD}
 DEF_COM_NUM=${DEF_COM_NUM:-5}
 # Repo name for this script
 REPO_NAME="tmiland/kernel-installer"
+# Pinned slib.sh revision for the remote fallback (used when running outside a
+# checkout, e.g. curl | bash). The file is fetched from an immutable commit and
+# verified against its sha256 before being sourced.
+# When src/slib.sh changes: set SLIB_REV to a commit on main containing the new
+# file and SLIB_SHA256 to the output of `sha256sum src/slib.sh`.
+SLIB_REV="48aefb56df0d25e766e6eeed0db4a16b2b400ebe"
+SLIB_SHA256="b59fe3a9ede69a7e58af2c395b7cc7d655f96346a365abdd21f8471cce0ed036"
 # Functions url
-SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/main/src/slib.sh
+SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/$SLIB_REV/src/slib.sh
 # Set default configuration target
 CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
 
@@ -107,18 +114,29 @@ if [[ -f $SCRIPT_DIR/src/slib.sh ]]; then
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/src/slib.sh"
 else
-  # NOTE: this executes remote code when the script is run outside a checkout
-  # (e.g. curl | bash). Prefer running it from the repository.
+  # Running outside a checkout (e.g. curl | bash): fetch the pinned slib.sh
+  # revision and verify its checksum before sourcing it.
+  slib_tmp=$(mktemp) || {
+    echo -e "Could not create a temporary file.\nProcess aborted"
+    exit 1
+  }
   if [[ $(command -v 'curl') ]]; then
-    # shellcheck source=/dev/null
-    source <(curl -sSLf $SLIB_URL)
+    curl -sSLf "$SLIB_URL" > "$slib_tmp"
   elif [[ $(command -v 'wget') ]]; then
-    # shellcheck source=/dev/null
-    . <(wget -qO - $SLIB_URL)
+    wget -qO "$slib_tmp" "$SLIB_URL"
   else
+    rm -f "$slib_tmp"
     echo -e "${RED}${BALLOT_X} This script requires curl or wget.\nProcess aborted${NORMAL}"
     exit 1
   fi
+  if ! echo "$SLIB_SHA256  $slib_tmp" | sha256sum -c - >/dev/null 2>&1; then
+    rm -f "$slib_tmp"
+    echo -e "Checksum verification of slib.sh failed, refusing to execute it.\nProcess aborted"
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  . "$slib_tmp"
+  rm -f "$slib_tmp"
 fi
 
 # Setup slog

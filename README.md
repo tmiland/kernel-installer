@@ -53,6 +53,9 @@ With Wget:
 wget -qO - https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | bash || exit 0
 ```
 
+When run outside a git checkout, a pinned and checksum-verified copy of the
+function library (`src/slib.sh`) is fetched automatically.
+
 For latest release
 
 ```bash
