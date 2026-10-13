@@ -15,7 +15,7 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 
 Will be installed when running script.
 ```bash
-wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc liblz4-tool paxctl libelf-dev flex bison
+wget curl git rsync fakeroot build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison
 ```
 
 ### Notes

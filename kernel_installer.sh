@@ -671,7 +671,10 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   PKGCHK="dpkg -s"
   #BUILD_DEP="apt-get -o Dpkg::Progress-Fancy="1" build-dep -qq"
   # Install packages
-  INSTALL_PKGS="wget curl git rsync fakeroot build-essential ncurses-dev xz-utils libssl-dev bc liblz4-tool paxctl libelf-dev flex bison debhelper apt-transport-https libdw-dev"
+  # Package names are tracked against Debian 12/13 and Ubuntu 22.04/24.04:
+  # "ncurses-dev" and "liblz4-tool" are transitional aliases that no longer
+  # resolve on newer releases, and "paxctl" was removed from the archive.
+  INSTALL_PKGS="wget curl git rsync fakeroot build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison debhelper apt-transport-https libdw-dev"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1159,8 +1162,11 @@ install_kernel() {
   # Final version should look like 5.18.0-rc7
   LINUX_FULL_VER=$(cat "$LINUX_VER_FINAL_FILE")
   # Install
-  run_ok "dpkg -i linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
-  run_ok "dpkg -i linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+  # Install through the package manager so that runtime dependencies of the
+  # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
+  # minimal systems, where a plain "dpkg -i" would fail.
+  run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+  run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
   log_success "Installation finished"
   # else
   #   # Install
