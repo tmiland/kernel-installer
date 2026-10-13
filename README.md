@@ -163,7 +163,9 @@ In order to enable specific kernel configs, one can use `--custom-config` like t
 ./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m"
 ```
 
-Note that `--custom-config can be used multiple times like:
+The directive must be a `scripts/config` command; raw `CONFIG_*` assignments (e.g. `CONFIG_DM_VDO=y`) are not accepted.
+
+Note that `--custom-config` can be used multiple times like:
 ```
 ./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m" --custom-config "scripts/config --set-val CONFIG_KERNEL_ZSTD y"
 ```

@@ -535,9 +535,9 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --custom-config | -cc)
+      require_arg "$1" "${2:-}"
       CUSTOM_CONFIG_OPTIONS+=("$2")
-      shift
-      shift
+      shift 2
       ;;
     --kexec | -x)
       shift
@@ -597,12 +597,13 @@ if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
   set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 fi
 
-if [ -n "$CUSTOM_CONFIG_OPTIONS" ]; then
-  SANITIZED_CUSTOM_CONFIG_OPTIONS=()
-  for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
-    SANITIZED_CUSTOM_CONFIG_OPTIONS+=("$(echo "$custom_config_option")")
-  done
-fi
+# Custom directives must invoke scripts/config; anything else (e.g. a raw
+# CONFIG_X=y assignment) would be silently ignored by eval
+for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
+  if [[ $custom_config_option != scripts/config* ]]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --custom-config expects a scripts/config command, got: ${custom_config_option}"
+  fi
+done
 
 # Start with a clean log
 if [[ -f $LOGFILE ]]; then
@@ -1154,7 +1155,7 @@ install_kernel() {
         scripts/config --enable CONFIG_ZRAM_BACKEND_842
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
-      for custom_config_option in "${SANITIZED_CUSTOM_CONFIG_OPTIONS[@]}"; do
+      for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
       done
