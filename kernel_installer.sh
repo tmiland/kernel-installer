@@ -43,32 +43,37 @@ VERSION='1.2.5'
 #set -o pipefail
 #set -o nounset
 #set -o xtrace
-# Get current directory
-CURRDIR=$(pwd)
 # Set update check
 UPDATE_SCRIPT=0
-# Get script filename
+# Operation mode: install or uninstall
+mode=install
+# Get script filename and directory (resolves symlinks)
 self=$(readlink -f "${BASH_SOURCE[0]}")
 SCRIPT_FILENAME=$(basename "$self")
+SCRIPT_DIR=$(dirname "$self")
 # Logfile
 LOGFILE=/var/log/kernel_installer.log
 # Default processing units (all available)
-NPROC=$(nproc)
+NPROC=${NPROC:-$(nproc)}
 # Console output level; ignore debug level messages.
-VERBOSE=0
+VERBOSE=${VERBOSE:-0}
 # Disable debug info since it's enabled by default to speed up kernel compilation
-ENABLE_DEBUG_INFO=0
+ENABLE_DEBUG_INFO=${ENABLE_DEBUG_INFO:-0}
 # Low latency (Default off)
-LOWLATENCY=0
+LOWLATENCY=${LOWLATENCY:-0}
 # get-verified-tarball (Default: no)
 GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-0}
 # Show banners (Default: yes)
-BANNERS=1
+BANNERS=${BANNERS:-1}
+# List installed kernels and exit (Default: no)
+LIST_INSTALLED=${LIST_INSTALLED:-0}
 # Default Install dir (Default: /opt/linux)
 INSTALL_DIR=${INSTALL_DIR:-/opt/linux-kernel}
+INSTALL_DIR_MARKER=".kernel_installer"
 # https://stackoverflow.com/a/51068988
 latest_kernel() {
-  curl -s https://www.kernel.org/finger_banner | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
+  curl -fsSL --max-time 20 --retry 3 --retry-delay 2 https://www.kernel.org/finger_banner 2>/dev/null \
+    | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
 }
 # Default Kernel version
 STABLE_VER=$(latest_kernel stable)
@@ -80,6 +85,8 @@ LONGTERM_VER=$(latest_kernel longterm)
 LINUX_VER=${LINUX_VER:-$STABLE_VER}
 # Default linux version name
 LINUX_VER_NAME=Stable
+# Set to 1 when the kernel version is explicitly chosen by the user
+VER_SELECTED=${VER_SELECTED:-0}
 # Installed kernel
 CURRENT_VER=$(uname -r)
 # Default kexec option
@@ -96,10 +103,12 @@ SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/main/src/slib.sh
 CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
 
 # Include functions
-if [[ -f $CURRDIR/src/slib.sh ]]; then
+if [[ -f $SCRIPT_DIR/src/slib.sh ]]; then
   # shellcheck disable=SC1091
-  . ./src/slib.sh
+  . "$SCRIPT_DIR/src/slib.sh"
 else
+  # NOTE: this executes remote code when the script is run outside a checkout
+  # (e.g. curl | bash). Prefer running it from the repository.
   if [[ $(command -v 'curl') ]]; then
     # shellcheck source=/dev/null
     source <(curl -sSLf $SLIB_URL)
@@ -108,7 +117,7 @@ else
     . <(wget -qO - $SLIB_URL)
   else
     echo -e "${RED}${BALLOT_X} This script requires curl or wget.\nProcess aborted${NORMAL}"
-    exit 0
+    exit 1
   fi
 fi
 
@@ -143,13 +152,39 @@ fatal() {
   echo
   log_fatal "Fatal Error Occurred: $1"
   printf "%s \\n" "${RED}Cannot continue installation.${NORMAL}"
-  if [ -x "$INSTALL_DIR" ]; then
+  if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
     rm -rf "$INSTALL_DIR"
+  elif [ -d "$INSTALL_DIR" ]; then
+    log_warning "Not removing $INSTALL_DIR: it may contain files not created by this installer."
   fi
   log_fatal "If you are unsure of what went wrong, you may wish to review the log"
   log_fatal "in $LOGFILE"
   exit 1
+}
+
+# Make sure an option that takes a value actually got one
+require_arg() {
+  # $1 = option name, $2 = value
+  if [[ -z $2 ]]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Option $1 requires an argument"
+  fi
+}
+
+# A directory is safe to reuse (and wipe) when it does not exist yet, is
+# empty, or was created by this installer in a previous run (marker present).
+is_safe_install_dir() {
+  local dir="$1"
+  if [ -z "$dir" ] || [ "$dir" = "/" ] || [ ! -d "$dir" ]; then
+    return 1
+  fi
+  if [ -e "$dir/$INSTALL_DIR_MARKER" ]; then
+    return 0
+  fi
+  if [ -z "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    return 0
+  fi
+  return 1
 }
 
 success() {
@@ -164,20 +199,28 @@ read_sleep() {
 chk_permissions() {
   # Only root can run this
   if [[ "$EUID" != 0 ]]; then
-    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_NAME} script must be run as root"
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_FILENAME} script must be run as root"
   fi
 }
 
 chk_kernel() {
   # Check if kernel is installed, abort if same version is found
-  if [ "$CURRENT_VER" = "${LINUX_VER}" ]; then
+  if [ "$CURRENT_VER" = "${LINUX_VER}" ] || dpkg -s "linux-image-${LINUX_VER}" >/dev/null 2>&1; then
     echo
-    read -rp "${YELLOW}Linux kernel $CURRENT_VER is already installed, install anyways?${NORMAL} [y/n]: " -e YESNO
-    if [ $YESNO == "y" ]; then
-      return
-    else
-      fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed. Process aborted${NORMAL}"
-    fi
+    read -rp "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: " -e YESNO
+    case ${YESNO,,} in
+      y | yes) return ;;
+      *)
+        fatal "${RED}${BALLOT_X} Kernel ${LINUX_VER} is already installed. Process aborted${NORMAL}"
+        ;;
+    esac
+  fi
+}
+
+# Make sure a valid kernel version was determined before doing anything destructive
+chk_version() {
+  if [[ ! $LINUX_VER =~ ^[0-9]+\.[0-9]+ ]]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Could not determine a valid kernel version (got: '${YELLOW}${LINUX_VER}${NORMAL}'). Check your network connection or specify a version with ${CYAN}--kernel${NORMAL}."
   fi
 }
 
@@ -207,14 +250,25 @@ header_logo() {
 }
 
 # Header
+# Print one centered line inside the header box
+box_line() {
+  local text=$1 inner=$2 pad
+  pad=$(( (inner - ${#text}) / 2 ))
+  printf ' ║%*s%s%*s║\n' "$pad" '' "$text" "$((inner - pad - ${#text}))" ''
+}
+
 header() {
+  # Inner width of the box, excluding the border characters
+  local HEADER_INNER=67 hr
+  printf -v hr '%*s' "$HEADER_INNER" ''
+  hr=${hr// /═}
   echo -e "${GREEN}\n"
-  echo ' ╔═══════════════════════════════════════════════════════════════════╗'
-  echo ' ║                        '"${SCRIPT_NAME}"'                        ║'
-  echo ' ║                  Automatic kernel install script                  ║'
-  echo ' ║                      Maintained by @tmiland                       ║'
-  echo ' ║                          version: '${VERSION}'                           ║'
-  echo ' ╚═══════════════════════════════════════════════════════════════════╝'
+  echo " ╔${hr}╗"
+  box_line "${SCRIPT_FILENAME}" "$HEADER_INNER"
+  box_line "Automatic kernel install script" "$HEADER_INNER"
+  box_line "Maintained by @tmiland" "$HEADER_INNER"
+  box_line "version: ${VERSION}" "$HEADER_INNER"
+  echo " ╚${hr}╝"
   echo -e "${NORMAL}"
 }
 
@@ -222,7 +276,7 @@ header() {
 show_update_banner () {
   header
   echo ""
-  echo "There is a newer version of ${SCRIPT_NAME} available."
+  echo "There is a newer version of ${SCRIPT_FILENAME} available."
   #echo ""
   echo ""
   echo -e "${GREEN}${DONE} New version:${NORMAL} ${RELEASE_TAG} - ${RELEASE_TITLE}"
@@ -247,7 +301,7 @@ exit_script() {
 }
 
 ##
-# Returns the version number of ${SCRIPT_NAME} file on line 14
+# Returns the version number of ${SCRIPT_FILENAME} file on line 14
 ##
 get_updater_version () {
   echo $(sed -n '14 s/[^0-9.]*\([0-9.]*\).*/\1/p' "$1")
@@ -256,81 +310,113 @@ get_updater_version () {
 # Update script
 # Default: Do not check for update
 update_updater () {
-  # Download files
+  # Download a file, printing the temp path (empty on failure)
   download_file () {
-    declare -r url=$1
-    declare -r tf=$(mktemp)
-    local dlcmd=''
-    dlcmd="wget -O $tf"
-    $dlcmd "${url}" &>/dev/null && echo "$tf" || echo '' # return the temp-filename (or empty string on error)
-  }
-  # Open files
-  open_file () { #expects one argument: file_path
-
-    if [ "$(uname)" == 'Darwin' ]; then
-      open "$1"
-    elif [ "$(cut $(uname -s) 1 5)" == "Linux" ]; then
-      xdg-open "$1"
+    local url=$1 tf
+    tf=$(mktemp)
+    if command -v curl >/dev/null 2>&1; then
+      curl -sSLf -o "$tf" "${url}" && echo "$tf" || echo ''
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$tf" "${url}" && echo "$tf" || echo ''
     else
-      echo -e "${RED}${ERROR} Error: Sorry, opening files is not supported for your OS.${NC}"
+      echo ''
     fi
   }
-  # Get latest release tag from GitHub
-  get_latest_release_tag() {
-    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+  # Fetch the latest release info once, then parse the fields we need
+  local release_json release_file
+  release_file=$(download_file "https://api.github.com/repos/${REPO_NAME}/releases/latest")
+  if [ -n "$release_file" ]; then
+    release_json=$(cat "$release_file")
+    rm -f "$release_file"
+  else
+    release_json=''
+  fi
+
+  if [ -z "$release_json" ]; then
+    log_error "Could not fetch the latest release info. Check your network connection."
+    return 1
+  fi
+
+  # Latest release tag
+  RELEASE_TAG=$(printf '%s\n' "$release_json" |
     grep '"tag_name":' |
-    sed -n 's/[^0-9.]*\([0-9.]*\).*/\1/p'
-  }
+    sed -n 's/[^0-9.]*\([0-9.]*\).*/\1/p')
 
-  RELEASE_TAG=$(get_latest_release_tag ${REPO_NAME})
-
-  # Get latest release download url
-  get_latest_release() {
-    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+  # Latest release download url
+  LATEST_RELEASE=$(printf '%s\n' "$release_json" |
     grep '"browser_download_url":' |
-    sed -n 's#.*\(https*://[^"]*\).*#\1#;p'
-  }
+    sed -n 's#.*\(https*://[^"]*\).*#\1#;p')
 
-  LATEST_RELEASE=$(get_latest_release ${REPO_NAME})
-
-  # Get latest release notes
-  get_latest_release_note() {
-    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+  # Latest release notes
+  RELEASE_NOTE=$(printf '%s\n' "$release_json" |
     grep '"body":' |
-    sed -n 's/.*"\([^"]*\)".*/\1/;p'
-  }
+    sed -n 's/.*"\([^"]*\)".*/\1/;p')
 
-  RELEASE_NOTE=$(get_latest_release_note ${REPO_NAME})
-
-  # Get latest release title
-  get_latest_release_title() {
-    curl --silent "https://api.github.com/repos/$1/releases/latest" |
+  # Latest release title
+  RELEASE_TITLE=$(printf '%s\n' "$release_json" |
     grep -m 1 '"name":' |
-    sed -n 's/.*"\([^"]*\)".*/\1/;p'
-  }
-
-  RELEASE_TITLE=$(get_latest_release_title ${REPO_NAME})
+    sed -n 's/.*"\([^"]*\)".*/\1/;p')
 
   echo -e "${GREEN}${ARROW} Checking for updates...${NORMAL}"
-  # Get tmpfile from github
-  declare -r tmpfile=$(download_file "$LATEST_RELEASE")
-  if [[ $(get_updater_version "${CURRDIR}/$SCRIPT_FILENAME") < "${RELEASE_TAG}" ]]; then
+  local tmpfile current_version
+  tmpfile=$(download_file "$LATEST_RELEASE")
+  current_version=$(get_updater_version "$self")
+
+  # Only proceed when RELEASE_TAG is a strictly newer version
+  if [ -n "$RELEASE_TAG" ] && [ "$current_version" != "$RELEASE_TAG" ] &&
+    [ "$(printf '%s\n%s\n' "$current_version" "$RELEASE_TAG" | sort -V | tail -n1)" = "$RELEASE_TAG" ]; then
     if [ $UPDATE_SCRIPT = "1" ]; then
       show_update_banner
       echo -e "${RED}${ARROW} Do you want to update [Y/N?]${NORMAL}"
       read -p "" -n 1 -r
       echo -e "\n\n"
       if [[ $REPLY =~ ^[Yy]$ ]]; then
-        mv "${tmpfile}" "${CURRDIR}/${SCRIPT_FILENAME}"
-        chmod u+x "${CURRDIR}/${SCRIPT_FILENAME}"
-        "${CURRDIR}/${SCRIPT_FILENAME}" "$@" -d
-        exit 1 # Update available, user chooses to update
+        if [ -z "$tmpfile" ]; then
+          log_error "Failed to download the new version. Aborting update."
+          return 1
+        fi
+        if ! mv "$tmpfile" "${SCRIPT_DIR}/${SCRIPT_FILENAME}"; then
+          log_error "Failed to install the new version. Aborting update."
+          rm -f "$tmpfile"
+          return 1
+        fi
+        chmod u+x "${SCRIPT_DIR}/${SCRIPT_FILENAME}"
+        echo -e "${GREEN}${DONE} Updated to version ${RELEASE_TAG}, restarting...${NORMAL}"
+
+        # Re-exec the updated script, preserving the parsed options
+        local -a reexec_args=()
+        if [ "$mode" = "uninstall" ]; then
+          reexec_args+=(--uninstall)
+        fi
+        local arg
+        for arg in "$@"; do
+          case "$arg" in
+            --update | -upd) continue ;;
+          esac
+          reexec_args+=("$arg")
+        done
+
+        exec env \
+          INSTALL_DIR="$INSTALL_DIR" \
+          LINUX_VER="$LINUX_VER" \
+          LINUX_VER_NAME="$LINUX_VER_NAME" \
+          NPROC="$NPROC" \
+          KEXEC="$KEXEC" \
+          VERBOSE="$VERBOSE" \
+          CONFIG_OPTION="$CONFIG_OPTION" \
+          DEFAULT_COMPRESSION="$DEFAULT_COMPRESSION" \
+          GET_VERIFIED_TARBALL="$GET_VERIFIED_TARBALL" \
+          ENABLE_DEBUG_INFO="$ENABLE_DEBUG_INFO" \
+          LOWLATENCY="$LOWLATENCY" \
+          BANNERS="$BANNERS" \
+          LIST_INSTALLED="$LIST_INSTALLED" \
+          "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
       fi
-      if [[ $REPLY =~ ^[Nn]$ ]]; then
-        return 1 # Update available, but user chooses not to update
-      fi
+      rm -f "$tmpfile"
+      return 1 # Update available, but not applied
     fi
   else
+    rm -f "$tmpfile"
     echo -e "${GREEN}${DONE} No update available.${NORMAL}"
     return 0 # No update available
   fi
@@ -386,41 +472,51 @@ while [[ $# -gt 0 ]]; do
       shift
       LINUX_VER=$STABLE_VER
       LINUX_VER_NAME=Stable
+      VER_SELECTED=1
       ;;
     --mainline | -m)
       shift
       LINUX_VER=$MAINLINE_VER
       LINUX_VER_NAME=Mainline
+      VER_SELECTED=1
       ;;
     --longterm | -l)
       shift
       LINUX_VER=$LONGTERM_VER
       LINUX_VER_NAME=Longterm
+      VER_SELECTED=1
       ;;
     --kernel | -k)
+      require_arg "$1" "${2:-}"
+      if [[ ! $2 =~ ^[0-9] ]]; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Invalid kernel version: $2"
+      fi
       LINUX_VER="$2"
       LINUX_VER_NAME=Custom
-      shift
-      shift
+      VER_SELECTED=1
+      shift 2
       ;;
     --dir | -d) # Bash Space-Separated (e.g., --option argument)
+      require_arg "$1" "${2:-}"
       INSTALL_DIR="$2"/linux-kernel # Source: https://stackoverflow.com/a/14203146
-      shift # past argument
-      shift # past value
+      shift 2 # past option and value
       ;;
     --config | -c)
+      require_arg "$1" "${2:-}"
       CONFIG_OPTION="$2"
-      shift
-      shift
+      shift 2
       ;;
     --kexec | -x)
       shift
       KEXEC=1
       ;;
     --nproc | -n)
+      require_arg "$1" "${2:-}"
+      if [[ ! $2 =~ ^[1-9][0-9]*$ ]]; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Invalid number of processing units: $2"
+      fi
       NPROC=$2
-      shift
-      shift
+      shift 2
       ;;
     --enable-debug-info | -edi)
       shift
@@ -435,8 +531,9 @@ while [[ $# -gt 0 ]]; do
       LIST_INSTALLED=1
       ;;
     --default-compression | -dc)
-      shift
-      DEFAULT_COMPRESSION="$1"
+      require_arg "$1" "${2:-}"
+      DEFAULT_COMPRESSION="$2"
+      shift 2
       ;;
     --changelog | -cl)
       changelog
@@ -445,7 +542,7 @@ while [[ $# -gt 0 ]]; do
     --update | -upd)
       UPDATE_SCRIPT=1
       update_updater "$@"
-      exit 0
+      exit $?
       ;;
     --uninstall | -u)
       shift
@@ -463,9 +560,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
-
-chk_kernel
+if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
+  set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+fi
 
 # Start with a clean log
 if [[ -f $LOGFILE ]]; then
@@ -545,7 +642,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # shellcheck disable=SC2140
   # UPGRADE="apt-get -o Dpkg::Progress-Fancy="1" upgrade -qq"
   # shellcheck disable=SC2140
-  INSTALL="apt-get -o Dpkg::Progress-Fancy="1" install -qq"
+  INSTALL="apt-get -o Dpkg::Progress-Fancy="1" install -qq -y"
   # # shellcheck disable=SC2140
   # UNINSTALL="apt-get -o Dpkg::Progress-Fancy="1" remove -qq"
   # # shellcheck disable=SC2140
@@ -648,12 +745,12 @@ get_verified_tarball() {
   # Where to download the tarball and verification data.
   TARGETDIR="$INSTALL_DIR"
 
-  # If you set this to empty value, we'll make a temporary
-  # directory and fetch the verification keys from the
+  # If you set this to empty value (e.g. GNUPGHOME= ./kernel_installer.sh),
+  # we'll make a temporary directory and fetch the verification keys from the
   # Web Key Directory each time. Also, see the USEKEYRING=
   # configuration option for an alternative that doesn't
   # rely on WKD.
-  GNUPGHOME="$HOME/.gnupg"
+  GNUPGHOME=${GNUPGHOME-"$HOME/.gnupg"}
 
   # For CI and other automated infrastructure, you may want to
   # create a keyring containing the keys belonging to:
@@ -672,8 +769,9 @@ get_verified_tarball() {
 
   # Point this at your GnuPG binary version 2.1.11 or above.
   # If you are using USEKEYRING, GnuPG-1 will work, too.
-  GPGBIN="/usr/bin/gpg2"
-  GPGVBIN="/usr/bin/gpgv2"
+  # Modern distributions only ship the gpg/gpgv binaries.
+  GPGBIN="$(command -v gpg2 || command -v gpg)"
+  GPGVBIN="$(command -v gpgv2 || command -v gpgv)"
   # We need a compatible version of sha256sum, too
   SHA256SUMBIN="/usr/bin/sha256sum"
   # And curl
@@ -718,22 +816,20 @@ get_verified_tarball() {
   if [[ -f ${TARGET} ]]; then
     log_debug "File ${TARGETDIR}/linux-${LINUX_VER}.tar.xz already exists."
     echo "Skipping download..."
+    return 0
   fi
 
   # Start by making sure our GnuPG environment is sane
-  if [[ ! -x ${GPGBIN} ]]; then
-    echo "Could not find gpg in ${GPGBIN}"
-    log_debug "Installing gnupg2"
-    ${INSTALL} gnupg2
+  if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
+    echo "Could not find gpg or gpgv, installing gnupg"
+    log_debug "Installing gnupg"
+    ${INSTALL} gnupg
+    GPGBIN="$(command -v gpg2 || command -v gpg)"
+    GPGVBIN="$(command -v gpgv2 || command -v gpgv)"
+    if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
+      fatal "Failed to install gpg or gpgv"
+    fi
     echo "done"
-    #exit 1
-  fi
-  if [[ ! -x ${GPGVBIN} ]]; then
-    echo "Could not find gpgv in ${GPGVBIN}"
-    log_debug "Installing gpgv2"
-    ${INSTALL} gpgv2
-    echo "done"
-    #exit 1
   fi
 
   # Let's make a safe temporary directory for intermediates
@@ -753,10 +849,10 @@ get_verified_tarball() {
       #     exit 1
       #   fi
     fi
-    mkdir -p -m 0700 ${GNUPGHOME}
+    mkdir -p -m 0700 "${GNUPGHOME}"
     log_debug "Making sure we have all the necessary keys"
     ${GPGBIN} --batch --quiet \
-      --homedir ${GNUPGHOME} \
+      --homedir "${GNUPGHOME}" \
       --auto-key-locate wkd \
       --locate-keys ${DEVKEYS} ${SHAKEYS}
     # If this returned non-0, we bail
@@ -893,13 +989,19 @@ install_kernel() {
   log_debug "Phase 2 of 6: Linux source code download"
   printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}6${NORMAL}: Download Linux source code"
   if [ ! -d "$INSTALL_DIR" ]; then
-    mkdir "$INSTALL_DIR" 1>/dev/null 2>&1
+    if ! mkdir -p "$INSTALL_DIR" 1>/dev/null 2>&1; then
+      fatal "Could not create install directory $INSTALL_DIR"
+    fi
   fi
   if [ -d "$INSTALL_DIR" ]; then
+    if ! is_safe_install_dir "$INSTALL_DIR"; then
+      fatal "Install directory $INSTALL_DIR is not empty and does not look like it was created by this script. Refusing to delete its contents; use an empty directory or clean it up yourself."
+    fi
     #(
     #cd "$INSTALL_DIR"/linux || exit
     log_debug "Deleting old Linux source code files in $INSTALL_DIR"
     rm -rf "$INSTALL_DIR" && mkdir -p "$INSTALL_DIR"
+    touch "$INSTALL_DIR/$INSTALL_DIR_MARKER"
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
     if [ ! $LINUX_VER_NAME = "Mainline" ]; then
@@ -921,7 +1023,7 @@ install_kernel() {
     if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
       if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
         log_debug "Downloading Linux source code"
-        run_ok "wget --no-check-certificate -c $kernel_url" "Downloading..."
+        run_ok "wget -c $kernel_url" "Downloading..."
         log_success "Download finished"
       fi
     fi
@@ -1053,9 +1155,10 @@ install_kernel() {
   echo
   # Cleanup
   printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} Cleaning up"
-  if [ "$INSTALL_DIR" != "" ] && [ "$INSTALL_DIR" != "/" ]; then
+  if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_debug "Cleaning up temporary files in $INSTALL_DIR."
-    find "$INSTALL_DIR" -delete
+    find "$INSTALL_DIR" -mindepth 1 -delete
+    rmdir "$INSTALL_DIR" 2>/dev/null || true
   else
     log_error "Could not safely clean up temporary files because INSTALL DIR set to $INSTALL_DIR."
   fi
@@ -1075,6 +1178,10 @@ install_kernel() {
 chk_permissions
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
+  if [ "$VER_SELECTED" != "1" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} No kernel version selected for uninstall. Use ${CYAN}--kernel${NORMAL} to select one."
+  fi
+  chk_version
   if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
     apt purge linux-headers-"${LINUX_VER}"
   fi
@@ -1090,6 +1197,8 @@ if [ $LIST_INSTALLED == "1" ]; then
 fi
 
 # Install Kernel
+chk_version
+chk_kernel
 errors=$((0))
 if ! install_kernel; then
   errorlist="${errorlist}  ${YELLOW}◉${NORMAL} Kernel installation returned an error.\\n"
@@ -1106,7 +1215,7 @@ else
   log_warning "The following errors occurred during installation:"
   echo
   printf "%s" "${errorlist}"
-  if [ -x "$INSTALL_DIR" ]; then
+  if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
     rm -rf "$INSTALL_DIR"
   fi

@@ -190,7 +190,7 @@ log() {
       today=$(date +"%Y-%m-%d %H:%M:%S %Z")
       printf "[%s] [%s] %s\\n" "$today" "$log_level" "$log_text" |
       # Lets prepare the log for non-terminal
-      prepare_log_for_nonterminal >> "$LOG_PATH"
+      prepare_log_for_nonterminal 2>/dev/null >> "$LOG_PATH"
     fi
   fi
 
