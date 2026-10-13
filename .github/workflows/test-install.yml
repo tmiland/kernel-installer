@@ -1,0 +1,85 @@
+name: Test kernel install
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: Kernel version to build and install
+        required: false
+        default: 6.12.112
+  push:
+    branches: [main]
+    paths:
+      - kernel_installer.sh
+      - src/slib.sh
+      - .github/workflows/test-install.yml
+  pull_request:
+    paths:
+      - kernel_installer.sh
+      - src/slib.sh
+      - .github/workflows/test-install.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 12 (bookworm)
+            image: debian:12
+          - name: Debian 13 (trixie)
+            image: debian:13
+          - name: Ubuntu 22.04 (jammy)
+            image: ubuntu:22.04
+          - name: Ubuntu 24.04 (noble)
+            image: ubuntu:24.04
+    container:
+      image: ${{ matrix.image }}
+    env:
+      KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12.112' }}
+    steps:
+      - name: Install container prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates lsb-release procps
+      - uses: actions/checkout@v4
+      - name: Show environment
+        run: |
+          cat /etc/os-release
+          uname -r
+          echo "cpus: $(nproc), memory: $(free -h | awk '/Mem:/ {print $2}')"
+      - name: Build and install kernel ${{ env.KERNEL_VERSION }}
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}"
+      - name: Verify installation
+        run: |
+          set -ux
+          ver="${KERNEL_VERSION}"
+          dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
+          ls -la /boot/ || true
+          ls "/lib/modules/${ver}/kernel" | head || true
+          set -e
+          dpkg -s "linux-image-${ver}" >/dev/null
+          dpkg -s "linux-headers-${ver}" >/dev/null
+          test -f "/boot/vmlinuz-${ver}"
+          test -f "/boot/config-${ver}"
+          test -d "/lib/modules/${ver}/kernel"
+          test -d "/usr/src/linux-headers-${ver}"
+          test -f "/boot/initrd.img-${ver}"
+          echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-${{ matrix.image }}
+          path: /var/log/kernel_installer.log
+          if-no-files-found: ignore
