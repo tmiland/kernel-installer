@@ -47,6 +47,9 @@ jobs:
           - name: Ubuntu 24.04 (noble)
             image: ubuntu:24.04
             slug: ubuntu-24.04
+          - name: Fedora 44
+            image: fedora:44
+            slug: fedora-44
     container:
       image: ${{ matrix.image }}
     env:
@@ -55,9 +58,13 @@ jobs:
     steps:
       - name: Install container prerequisites
         run: |
-          apt-get update -qq
-          # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y git ca-certificates procps-ng
+          else
+            apt-get update -qq
+            # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          fi
       - uses: actions/checkout@v4
       - name: Show environment
         run: |
@@ -75,17 +82,31 @@ jobs:
         run: |
           set -ux
           ver="${KERNEL_VERSION}"
-          dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
-          ls -la /boot/ || true
-          ls "/lib/modules/${ver}/kernel" | head || true
-          set -e
-          dpkg -s "linux-image-${ver}" >/dev/null
-          dpkg -s "linux-headers-${ver}" >/dev/null
-          test -f "/boot/vmlinuz-${ver}"
-          test -f "/boot/config-${ver}"
-          test -d "/lib/modules/${ver}/kernel"
-          test -d "/usr/src/linux-headers-${ver}"
-          test -f "/boot/initrd.img-${ver}"
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -qa 'kernel*' | grep "${ver}" || true
+            ls -la /boot/ || true
+            ls "/lib/modules/${ver}/kernel" | head || true
+            set -e
+            rpm -q "kernel-${ver}" >/dev/null
+            rpm -q "kernel-devel-${ver}" >/dev/null
+            test -f "/boot/vmlinuz-${ver}"
+            test -f "/boot/config-${ver}"
+            test -d "/lib/modules/${ver}/kernel"
+            test -d "/usr/src/kernels/${ver}"
+            test -f "/boot/initramfs-${ver}.img"
+          else
+            dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
+            ls -la /boot/ || true
+            ls "/lib/modules/${ver}/kernel" | head || true
+            set -e
+            dpkg -s "linux-image-${ver}" >/dev/null
+            dpkg -s "linux-headers-${ver}" >/dev/null
+            test -f "/boot/vmlinuz-${ver}"
+            test -f "/boot/config-${ver}"
+            test -d "/lib/modules/${ver}/kernel"
+            test -d "/usr/src/linux-headers-${ver}"
+            test -f "/boot/initrd.img-${ver}"
+          fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
       - name: Upload installer logs
         if: always()

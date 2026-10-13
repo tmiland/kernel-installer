@@ -225,7 +225,13 @@ chk_permissions() {
 
 chk_kernel() {
   # Check if kernel is installed, abort if same version is found
-  if [ "$CURRENT_VER" = "${LINUX_VER}" ] || dpkg -s "linux-image-${LINUX_VER}" >/dev/null 2>&1; then
+  local kernel_pkg
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    kernel_pkg="kernel-${LINUX_VER}"
+  else
+    kernel_pkg="linux-image-${LINUX_VER}"
+  fi
+  if [ "$CURRENT_VER" = "${LINUX_VER}" ] || ${PKGCHK} "${kernel_pkg}" >/dev/null 2>&1; then
     echo
     read -rp "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: " -e YESNO
     case ${YESNO,,} in
@@ -605,17 +611,11 @@ case "$DISTRO" in
     LSB=lsb-release
     DISTRO_GROUP=Debian
     ;;
-  CentOS*)
-    PKGCMD="yum install -y"
-    LSB=redhat-lsb
-    DISTRO_GROUP=RHEL
-    echo -e "${RED}${BALLOT_X} distro not yet supported: '$DISTRO'${NORMAL}" ; exit 1
-    ;;
-  Fedora*)
+  CentOS*|Rocky*|AlmaLinux*|Fedora*|Red*)
+    # Fedora and the RHEL family (RHEL, Rocky, AlmaLinux, CentOS Stream)
     PKGCMD="dnf install -y"
-    LSB=redhat-lsb
+    LSB=redhat-lsb-core
     DISTRO_GROUP=RHEL
-    echo -e "${RED}${BALLOT_X} distro not yet supported: '$DISTRO'${NORMAL}" ; exit 1
     ;;
   Arch*|Manjaro*)
     PKGCMD="yes | LC_ALL=en_US.UTF-8 pacman -S"
@@ -625,7 +625,9 @@ case "$DISTRO" in
     ;;
   *) echo -e "${RED}${BALLOT_X} unknown distro: '$DISTRO'${NORMAL}" ; exit 1 ;;
 esac
-if ! lsb_release -si 1>/dev/null 2>&1; then
+# lsb_release is only needed to verify the install on Debian; the Fedora/RHEL
+# family is detected via /etc/redhat-release and no longer ships lsb_release.
+if [[ $DISTRO_GROUP != "RHEL" ]] && ! lsb_release -si 1>/dev/null 2>&1; then
   echo ""
   echo -e "${RED}${BALLOT_X} Looks like ${LSB} is not installed!${NORMAL}"
   echo ""
@@ -649,7 +651,7 @@ fi
 UPDATE=""
 #UPGRADE=""
 INSTALL=""
-# UNINSTALL=""
+UNINSTALL=""
 # PURGE=""
 # CLEAN=""
 PKGCHK=""
@@ -680,28 +682,24 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
-  # elif [[ $(lsb_release -si) == "CentOS" ]]; then
-  #   SUDO="sudo"
-  #   UPDATE="yum update -q"
-  #   # UPGRADE="yum upgrade -q"
-  #   INSTALL="yum install -y -q"
-  #   UNINSTALL="yum remove -y -q"
-  #   PURGE="yum purge -y -q"
-  #   CLEAN="yum clean all -y -q"
-  #   PKGCHK="rpm --quiet --query"
-  #   # Install packages
-  #   INSTALL_PKGS=""
-  # elif [[ $(lsb_release -si) == "Fedora" ]]; then
-  #   SUDO="sudo"
-  #   UPDATE="dnf update -q"
-  #   # UPGRADE="dnf upgrade -q"
-  #   INSTALL="dnf install -y -q"
-  #   UNINSTALL="dnf remove -y -q"
-  #   PURGE="dnf purge -y -q"
-  #   CLEAN="dnf clean all -y -q"
-  #   PKGCHK="rpm --quiet --query"
-  #   # Install packages
-  #   INSTALL_PKGS=""
+  elif [[ $DISTRO_GROUP == "RHEL" ]]; then
+    # Fedora / RHEL family: dnf on Fedora and EL8+, yum on older EL
+    if command -v dnf >/dev/null 2>&1; then
+      RH_PM="dnf"
+    else
+      RH_PM="yum"
+    fi
+    UPDATE="${RH_PM} -q makecache"
+    INSTALL="${RH_PM} -y -q install"
+    UNINSTALL="${RH_PM} -y -q remove"
+    PKGCHK="rpm -q"
+    # Install packages
+    # Package names are tracked against Fedora 44 and EL9:
+    # bc/binutils/... mirror the kernel.spec BuildRequires (enforced by
+    # rpmbuild during `make binrpm-pkg`), rpm-build provides rpmbuild,
+    # dracut/grubby let the kernel rpm scriptlets create the initramfs and
+    # boot entry at install time.
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils which diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
@@ -988,11 +986,22 @@ install_kernel() {
   if ! ${PKGCHK} $INSTALL_PKGS 1>/dev/null 2>&1; then
     log_debug "Updating packages"
     run_ok "${UPDATE}" "Updating package repo..."
+    # Collect only the missing packages and install them in a single
+    # transaction: installing them one by one re-resolves the dependency
+    # graph for every package (slow) and silently ignored install errors.
+    MISSING_PKGS=""
     for i in $INSTALL_PKGS; do
-      log_debug "Installing required packages $i"
-      # shellcheck disable=SC2086
-      ${INSTALL} ${i} >>"${RUN_LOG}" 2>&1
+      if ! ${PKGCHK} "${i}" 1>/dev/null 2>&1; then
+        MISSING_PKGS="${MISSING_PKGS} ${i}"
+      fi
     done
+    if [ -n "${MISSING_PKGS}" ]; then
+      log_debug "Installing required packages:${MISSING_PKGS}"
+      # shellcheck disable=SC2086
+      if ! run_ok "${INSTALL}${MISSING_PKGS}" "Installing required packages..."; then
+        fatal "Failed to install required packages:${MISSING_PKGS}"
+      fi
+    fi
   fi
   # log_debug "Install build dependencies required by the kernel build process"
   # run_ok "${BUILD_DEP} ${BUILD_DEP_PKGS}" "Installing build dependencies"
@@ -1138,7 +1147,11 @@ install_kernel() {
       log_debug "Compiling The Linux Kernel source code"
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
       # Add echo 5 to answer Default zram compressor as zstd
-      run_ok "echo $DEF_COM_NUM | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      if [[ $DISTRO_GROUP == "RHEL" ]]; then
+        run_ok "echo $DEF_COM_NUM | make binrpm-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      else
+        run_ok "echo $DEF_COM_NUM | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+      fi
       log_success "Compiling finished"
       echo
       # Installation
@@ -1171,13 +1184,24 @@ install_kernel() {
   # Install through the package manager so that runtime dependencies of the
   # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
   # minimal systems, where a plain "dpkg -i" would fail.
-  if ! compgen -G "./linux-headers-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null ||
-    ! compgen -G "./linux-image-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null; then
-    log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
-    exit 1
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    # binrpm-pkg writes kernel, kernel-devel and kernel-headers rpms to
+    # <kernel tree>/rpmbuild/RPMS/<arch>/ (see scripts/package/kernel.spec)
+    if ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-${LINUX_FULL_VER}*.rpm" >/dev/null ||
+      ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-devel-${LINUX_FULL_VER}*.rpm" >/dev/null; then
+      log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
+      exit 1
+    fi
+    run_ok "${INSTALL} ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-\"${LINUX_FULL_VER}\"*.rpm ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-devel-\"${LINUX_FULL_VER}\"*.rpm" "Installing Kernel image and headers: ${LINUX_VER}"
+  else
+    if ! compgen -G "./linux-headers-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null ||
+      ! compgen -G "./linux-image-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null; then
+      log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
+      exit 1
+    fi
+    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
   fi
-  run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
-  run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
   log_success "Installation finished"
   # else
   #   # Install
@@ -1219,17 +1243,30 @@ if [ "$mode" = "uninstall" ]; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} No kernel version selected for uninstall. Use ${CYAN}--kernel${NORMAL} to select one."
   fi
   chk_version
-  if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
-    apt purge linux-headers-"${LINUX_VER}"
-  fi
-  if dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
-    apt purge linux-image-"${LINUX_VER}"
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    if ${PKGCHK} kernel-"${LINUX_VER}" >/dev/null 2>&1; then
+      ${UNINSTALL} kernel-"${LINUX_VER}"
+    fi
+    if ${PKGCHK} kernel-devel-"${LINUX_VER}" >/dev/null 2>&1; then
+      ${UNINSTALL} kernel-devel-"${LINUX_VER}"
+    fi
+  else
+    if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
+      apt purge linux-headers-"${LINUX_VER}"
+    fi
+    if dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
+      apt purge linux-image-"${LINUX_VER}"
+    fi
   fi
   exit
 fi
 
 if [ $LIST_INSTALLED == "1" ]; then
-  dpkg --list | grep -Ei 'linux-image|linux-headers|linux-modules' | awk '{ print $2 }'
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    rpm -qa | grep -E '^kernel(-devel|-headers|-core|-modules|-modules-extra)?-[0-9]' | sort
+  else
+    dpkg --list | grep -Ei 'linux-image|linux-headers|linux-modules' | awk '{ print $2 }'
+  fi
   exit
 fi
 

@@ -7,7 +7,7 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 [![licence](https://img.shields.io/github/license/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/blob/master/LICENSE)
 ![Bash](https://img.shields.io/badge/Language-SH-4EAA25.svg?style=for-the-badge)
 
-### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions, for all architectures.
+### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions and the Fedora/RHEL family.
 
 [![kernel-installer Image](https://raw.githubusercontent.com/tmiland/kernel-installer/main/_images/kernel_installer.png)](https://github.com/tmiland/kernel-installer/blob/main/_images/kernel_installer.png)
 
@@ -15,7 +15,10 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 
 Will be installed when running script.
 ```bash
+# Debian/Ubuntu
 wget curl git rsync fakeroot build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison
+# Fedora/RHEL
+wget curl git rsync ca-certificates procps-ng findutils which diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
 ```
 
 ### Notes
@@ -205,7 +208,7 @@ To uninstall previously installed kernel:
 
 ## Testing
 
-Tested and working on: Debian 12
+Tested and working on: Debian 12/13, Ubuntu 22.04/24.04 and Fedora 44 (see [test-install.yml](.github/workflows/test-install.yml))
 
 - See [kernel_installer.log](https://raw.githubusercontent.com/tmiland/kernel-installer/main/log/kernel_installer.log)
 
