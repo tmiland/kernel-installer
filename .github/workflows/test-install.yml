@@ -37,16 +37,21 @@ jobs:
         include:
           - name: Debian 12 (bookworm)
             image: debian:12
+            slug: debian-12
           - name: Debian 13 (trixie)
             image: debian:13
+            slug: debian-13
           - name: Ubuntu 22.04 (jammy)
             image: ubuntu:22.04
+            slug: ubuntu-22.04
           - name: Ubuntu 24.04 (noble)
             image: ubuntu:24.04
+            slug: ubuntu-24.04
     container:
       image: ${{ matrix.image }}
     env:
       KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12.112' }}
+      TERM: xterm
     steps:
       - name: Install container prerequisites
         run: |
@@ -60,6 +65,11 @@ jobs:
           echo "cpus: $(nproc), memory: $(free -h | awk '/Mem:/ {print $2}')"
       - name: Build and install kernel ${{ env.KERNEL_VERSION }}
         run: ./kernel_installer.sh -k "${KERNEL_VERSION}"
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel_installer.log || true
       - name: Verify installation
         run: |
           set -ux
@@ -80,6 +90,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-installer-logs-${{ matrix.image }}
+          name: kernel-installer-logs-${{ matrix.slug }}
           path: /var/log/kernel_installer.log
           if-no-files-found: ignore
