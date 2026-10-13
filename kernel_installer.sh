@@ -61,8 +61,8 @@ VERBOSE=${VERBOSE:-0}
 ENABLE_DEBUG_INFO=${ENABLE_DEBUG_INFO:-0}
 # Low latency (Default off)
 LOWLATENCY=${LOWLATENCY:-0}
-# get-verified-tarball (Default: no)
-GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-0}
+# get-verified-tarball (Default: yes; set GET_VERIFIED_TARBALL=0 to skip verification)
+GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-1}
 # Show banners (Default: yes)
 BANNERS=${BANNERS:-1}
 # List installed kernels and exit (Default: no)
@@ -458,7 +458,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--kexec                |-x${NORMAL}   load new kernel without reboot"
   printf "%s\\n" "  ${YELLOW}--config               |-c${NORMAL}   set configuration target"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
-  printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball"
+  printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
   printf "%s\\n" "  ${YELLOW}--enable-debug-info    |-edi${NORMAL} enable debug info"
   printf "%s\\n" "  ${YELLOW}--lowlatency           |-low${NORMAL} convert generic config to lowlatency"
@@ -1036,7 +1036,10 @@ install_kernel() {
         file_ext=xz
       else
         # get-verified-tarball function
-        run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."
+        if ! run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
+          log_error "Failed to download and verify the kernel tarball. Aborting."
+          exit 1
+        fi
         log_success "Downloaded and verified ${TARGET}"
         file_ext=xz
       fi
