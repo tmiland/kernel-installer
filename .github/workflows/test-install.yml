@@ -56,7 +56,8 @@ jobs:
       - name: Install container prerequisites
         run: |
           apt-get update -qq
-          apt-get install -y -qq git ca-certificates lsb-release procps
+          # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
       - uses: actions/checkout@v4
       - name: Show environment
         run: |
