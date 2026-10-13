@@ -115,3 +115,59 @@ jobs:
           name: kernel-installer-logs-${{ matrix.slug }}
           path: /var/log/kernel_installer.log
           if-no-files-found: ignore
+
+  custom-config-smoke:
+    name: Custom config smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: ubuntu:24.04
+    env:
+      KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12.112' }}
+      TERM: xterm
+    steps:
+      - name: Install container prerequisites
+        run: |
+          apt-get update -qq
+          # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+      - uses: actions/checkout@v4
+      - name: Reject malformed --custom-config values
+        run: |
+          set -eux
+          # a missing value must abort immediately
+          if ./kernel_installer.sh --custom-config >/tmp/cc-missing.log 2>&1; then
+            echo "FAIL: --custom-config without a value was accepted"
+            exit 1
+          fi
+          grep -q "requires an argument" /tmp/cc-missing.log
+          # a raw CONFIG_FOO=y assignment is not a scripts/config command and must abort
+          if ./kernel_installer.sh -cc 'CONFIG_FOO=y' >/tmp/cc-raw.log 2>&1; then
+            echo "FAIL: raw CONFIG_FOO=y was accepted"
+            exit 1
+          fi
+          grep -q "expects a scripts/config command" /tmp/cc-raw.log
+          echo "Fast validation checks passed"
+      - name: Build and install kernel ${{ env.KERNEL_VERSION }} with custom config
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel_installer.log || true
+      - name: Verify custom config applied
+        run: |
+          set -eux
+          ver="${KERNEL_VERSION}"
+          dpkg -s "linux-image-${ver}" >/dev/null
+          test -f "/boot/config-${ver}"
+          grep -q '^CONFIG_DEFAULT_HOSTNAME="cc-smoke"$' "/boot/config-${ver}"
+          grep -q '^CONFIG_PANIC_TIMEOUT=42$' "/boot/config-${ver}"
+          echo "Custom config directives verified in /boot/config-${ver}"
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-custom-config-smoke
+          path: /var/log/kernel_installer.log
+          if-no-files-found: ignore
