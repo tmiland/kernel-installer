@@ -15,4 +15,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint shell scripts
-        run: shellcheck kernel_installer.sh src/slib.sh
+        run: shellcheck kernel_installer.sh src/slib.sh scripts/update-slib.sh
+
+  slib-pin:
+    name: slib pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned slib URL matches SLIB_SHA256
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source <(grep -E '^(REPO_NAME|SLIB_REV|SLIB_SHA256|SLIB_URL)=' kernel_installer.sh)
+          echo "Pinned URL: $SLIB_URL"
+          tmp=$(mktemp)
+          if ! curl -sSLf "$SLIB_URL" -o "$tmp"; then
+            echo "::error::Pinned slib URL does not resolve: $SLIB_URL"
+            exit 1
+          fi
+          actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+          if [ "$actual" != "$SLIB_SHA256" ]; then
+            echo "::error::Pinned slib URL serves sha256 $actual, expected $SLIB_SHA256"
+            exit 1
+          fi
+          echo "OK: pinned URL serves the expected checksum"
+      - name: Check vendored src/slib.sh against the pin
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source <(grep -E '^SLIB_SHA256=' kernel_installer.sh)
+          local_sha=$(sha256sum src/slib.sh | cut -d' ' -f1)
+          if [ "$local_sha" = "$SLIB_SHA256" ]; then
+            echo "OK: vendored src/slib.sh matches SLIB_SHA256"
+            exit 0
+          fi
+          msg="src/slib.sh ($local_sha) does not match SLIB_SHA256 ($SLIB_SHA256); after merging a slib update run scripts/update-slib.sh --finalize <commit>"
+          if [ "$REF" = "refs/heads/main" ]; then
+            echo "::error::$msg"
+            exit 1
+          fi
+          echo "::warning::$msg"

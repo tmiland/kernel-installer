@@ -209,6 +209,26 @@ Tested and working on: Debian 12
 
 - See [kernel_installer.log](https://raw.githubusercontent.com/tmiland/kernel-installer/main/log/kernel_installer.log)
 
+## Maintenance
+
+### Updating the vendored slib
+
+`src/slib.sh` is a curated subset of [virtualmin/slib](https://github.com/virtualmin/slib) (tracked via [tmiland/slib](https://github.com/tmiland/slib)). Updates are two-phase, and CI enforces the second one on `main`:
+
+```bash
+# Phase 1 - vendor the new file (defaults to tmiland/slib@master)
+scripts/update-slib.sh
+git add src/slib.sh && git commit -m 'chore: update vendored slib.sh' && git push
+
+# Phase 2 - pin the pushed commit (updates SLIB_REV / SLIB_SHA256)
+scripts/update-slib.sh --finalize <commit>
+git add kernel_installer.sh && git commit -m 'chore: bump slib pin' && git push
+```
+
+- Use `--source virtualmin/slib` to pull upstream directly. Sync your fork first with `gh repo sync tmiland/slib -b master`.
+- Sources contain extra Virtualmin-only helpers and are not lint-clean as-is (e.g. `#!/bin/sh` shebang); the vendored copy is a trimmed, lint-clean subset. Review `git diff src/slib.sh` and the helper's shellcheck output before committing.
+- Until phase 2 lands on `main`, the `slib pin` CI job fails (that is the reminder).
+
 ## Feature request and bug reports
 - [Bug report](https://github.com/tmiland/kernel-installer/issues/new?assignees=tmiland&labels=bug&template=bug_report.md&title=Bug-report:)
 - [Feature request](https://github.com/tmiland/kernel-installer/issues/new?assignees=tmiland&labels=enhancement&template=feature_request.md&title=Feature-request:)

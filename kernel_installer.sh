@@ -100,8 +100,10 @@ REPO_NAME="tmiland/kernel-installer"
 # Pinned slib.sh revision for the remote fallback (used when running outside a
 # checkout, e.g. curl | bash). The file is fetched from an immutable commit and
 # verified against its sha256 before being sourced.
-# When src/slib.sh changes: set SLIB_REV to a commit on main containing the new
-# file and SLIB_SHA256 to the output of `sha256sum src/slib.sh`.
+# When src/slib.sh changes: run scripts/update-slib.sh (phase 1: vendor and
+# commit the file), then scripts/update-slib.sh --finalize <commit> (phase 2:
+# pin SLIB_REV to the pushed commit and refresh SLIB_SHA256). The "slib pin"
+# CI job fails on main while the pin does not match src/slib.sh.
 SLIB_REV="48aefb56df0d25e766e6eeed0db4a16b2b400ebe"
 SLIB_SHA256="b59fe3a9ede69a7e58af2c395b7cc7d655f96346a365abdd21f8471cce0ed036"
 # Functions url
