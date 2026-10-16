@@ -605,6 +605,20 @@ for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
   fi
 done
 
+# Configuration targets that talk to the user on a terminal (menus or
+# prompts for new symbols). They run attached to /dev/tty instead of under
+# run_ok, which sends all output to the log; check for a terminal now rather
+# than after the download and unpack.
+CONFIG_INTERACTIVE=0
+case $CONFIG_OPTION in
+  config | oldconfig | menuconfig | nconfig | localmodconfig | localyesconfig)
+    CONFIG_INTERACTIVE=1
+    if ! { : </dev/tty; } 2>/dev/null; then
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --config $CONFIG_OPTION needs an interactive terminal, but none is available"
+    fi
+    ;;
+esac
+
 # Start with a clean log
 if [[ -f $LOGFILE ]]; then
   rm "$LOGFILE"
@@ -1098,13 +1112,15 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
       # cp /boot/config-"$(uname -r)" .config
       log_debug "Configuring..."
-      if [ ! "$CONFIG_OPTION" = "olddefconfig" ]; then
-        run_ok "make $CONFIG_OPTION" "Writing configuration..."
-        log_success "Configuration finished"
+      if [ "$CONFIG_INTERACTIVE" = "1" ]; then
+        log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
+        if ! make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
+          fatal "make $CONFIG_OPTION failed"
+        fi
       else
         run_ok "make $CONFIG_OPTION" "Writing configuration..."
-        log_success "Configuration finished"
       fi
+      log_success "Configuration finished"
       read_sleep 1
       # Disable debug info since it's enabled by default
       if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
