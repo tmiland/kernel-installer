@@ -987,6 +987,42 @@ get_verified_tarball() {
   log_success "Successfully downloaded and verified ${TARGET}"
 }
 
+# Boot into the freshly installed kernel without a full reboot.
+# systemctl kexec only loads a kernel by itself from Boot Loader
+# Specification entries (UEFI, e.g. systemd-boot) and refuses otherwise, so
+# load the new kernel explicitly first. The kernel is already installed at
+# this point, so a kexec failure is reported but is not an install failure.
+kexec_new_kernel() {
+  local release=$1 image initrd
+  local -a kexec_args
+  image=/boot/vmlinuz-${release}
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    initrd=/boot/initramfs-${release}.img
+  else
+    initrd=/boot/initrd.img-${release}
+  fi
+  if ! command -v kexec >/dev/null 2>&1; then
+    run_ok "${INSTALL} kexec-tools" "Installing kexec-tools..."
+  fi
+  if [ ! -f "$image" ]; then
+    log_error "Kernel image $image not found; reboot to use kernel ${release}."
+    return 0
+  fi
+  kexec_args=(-l "$image" --reuse-cmdline)
+  if [ -f "$initrd" ]; then
+    kexec_args+=(--initrd="$initrd")
+  fi
+  if ! kexec "${kexec_args[@]}"; then
+    log_error "Kernel ${release} is installed, but kexec could not load it; reboot to use it."
+    return 0
+  fi
+  log_info "Rebooting into kernel ${release} with kexec..."
+  if ! systemctl kexec; then
+    log_error "Kernel ${release} is installed, but systemctl kexec failed; reboot to use it."
+  fi
+  return 0
+}
+
 install_kernel() {
   clear
   header_logo
@@ -1248,9 +1284,7 @@ install_kernel() {
   printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} All ${GREEN}6${NORMAL} phases finished successfully"
 
   if [ "$KEXEC" = "1" ]; then
-    # Load the new kernel without reboot
-    ${INSTALL} kexec-tools
-    systemctl kexec
+    kexec_new_kernel "$LINUX_FULL_VER"
   fi
 }
 

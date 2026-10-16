@@ -1,0 +1,32 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: tests/test_*.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          # Every tests/test_*.sh runs unprivileged and exits non-zero on failure
+          fail=0
+          for t in tests/test_*.sh; do
+            echo "::group::$t"
+            if bash "$t"; then
+              echo "PASS $t"
+            else
+              echo "::error::FAIL $t"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$fail"
