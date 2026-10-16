@@ -108,6 +108,32 @@ jobs:
             test -f "/boot/initrd.img-${ver}"
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Uninstall kernel ${{ env.KERNEL_VERSION }}
+        run: |
+          set -ux
+          ver="${KERNEL_VERSION}"
+          # The uninstall run starts a new log; keep the install log for the artifact
+          cp /var/log/kernel_installer.log /tmp/kernel_installer.install.log
+          rc=0
+          # yes answers apt's purge confirmation (dnf runs with -y)
+          yes | ./kernel_installer.sh --uninstall -k "${ver}" || rc=$?
+          cat /var/log/kernel_installer.log || true
+          cp /tmp/kernel_installer.install.log /var/log/kernel_installer.log
+          test "$rc" -eq 0
+          if command -v dnf >/dev/null 2>&1; then
+            pkgs="kernel-${ver} kernel-devel-${ver}"
+            check="rpm -q"
+          else
+            pkgs="linux-image-${ver} linux-headers-${ver}"
+            check="dpkg -s"
+          fi
+          for p in $pkgs; do
+            if $check "$p" >/dev/null 2>&1; then
+              echo "FAIL: $p is still installed after --uninstall"
+              exit 1
+            fi
+          done
+          echo "Kernel ${ver} uninstalled"
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4

@@ -223,15 +223,48 @@ chk_permissions() {
   fi
 }
 
+# Kernel release (uname -r, package names) built from a kernel.org version.
+# The Makefile always has a SUBLEVEL, so 7.3 builds 7.3.0 and 7.3-rc7 builds
+# 7.3.0-rc7; versions that already have one (6.12.113, 7.0.0-38-generic) are
+# returned unchanged.
+kernel_release() {
+  local base=${1%%-*}
+  local extra=${1#"$base"}
+  if [[ $base =~ ^[0-9]+\.[0-9]+$ ]]; then
+    base=$base.0
+  fi
+  echo "${base}${extra}"
+}
+
+# Print the installed package <name>-<release> (name: linux-image,
+# linux-headers, kernel, kernel-devel); fails if it is not installed.
+# binrpm-pkg writes - as _ in the rpm version (kernel-7.3.0_rc7) while distro
+# kernels keep it (kernel-6.17.1-300.fc44.x86_64), so rpm tries both.
+installed_kernel_pkg() {
+  local name=$1 release=$2 pkg
+  local -a candidates=("$name-$release")
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    candidates+=("$name-${release//-/_}")
+  fi
+  for pkg in "${candidates[@]}"; do
+    if ${PKGCHK} "$pkg" >/dev/null 2>&1; then
+      echo "$pkg"
+      return 0
+    fi
+  done
+  return 1
+}
+
 chk_kernel() {
   # Check if kernel is installed, abort if same version is found
-  local kernel_pkg
+  local release image_pkg
+  release=$(kernel_release "$LINUX_VER")
   if [[ $DISTRO_GROUP == "RHEL" ]]; then
-    kernel_pkg="kernel-${LINUX_VER}"
+    image_pkg=kernel
   else
-    kernel_pkg="linux-image-${LINUX_VER}"
+    image_pkg=linux-image
   fi
-  if [ "$CURRENT_VER" = "${LINUX_VER}" ] || ${PKGCHK} "${kernel_pkg}" >/dev/null 2>&1; then
+  if [ "$CURRENT_VER" = "$release" ] || installed_kernel_pkg "$image_pkg" "$release" >/dev/null; then
     echo
     read -rp "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: " -e YESNO
     case ${YESNO,,} in
@@ -1262,20 +1295,27 @@ if [ "$mode" = "uninstall" ]; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} No kernel version selected for uninstall. Use ${CYAN}--kernel${NORMAL} to select one."
   fi
   chk_version
+  # Packages are named after the kernel release (7.3-rc7 -> 7.3.0-rc7)
+  uninstall_release=$(kernel_release "$LINUX_VER")
+  uninstall_pkgs=()
   if [[ $DISTRO_GROUP == "RHEL" ]]; then
-    if ${PKGCHK} kernel-"${LINUX_VER}" >/dev/null 2>&1; then
-      ${UNINSTALL} kernel-"${LINUX_VER}"
-    fi
-    if ${PKGCHK} kernel-devel-"${LINUX_VER}" >/dev/null 2>&1; then
-      ${UNINSTALL} kernel-devel-"${LINUX_VER}"
-    fi
+    uninstall_names="kernel kernel-devel"
   else
-    if dpkg -s linux-headers-"${LINUX_VER}" >/dev/null 2>&1; then
-      apt purge linux-headers-"${LINUX_VER}"
+    uninstall_names="linux-headers linux-image"
+  fi
+  for name in $uninstall_names; do
+    if pkg=$(installed_kernel_pkg "$name" "$uninstall_release"); then
+      uninstall_pkgs+=("$pkg")
     fi
-    if dpkg -s linux-image-"${LINUX_VER}" >/dev/null 2>&1; then
-      apt purge linux-image-"${LINUX_VER}"
-    fi
+  done
+  if [ ${#uninstall_pkgs[@]} -eq 0 ]; then
+    log_error "No installed kernel packages found for ${LINUX_VER} (release ${uninstall_release})."
+    exit 1
+  fi
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    ${UNINSTALL} "${uninstall_pkgs[@]}"
+  else
+    apt purge "${uninstall_pkgs[@]}"
   fi
   exit
 fi
