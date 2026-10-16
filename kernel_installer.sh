@@ -47,8 +47,14 @@ VERSION='1.2.6'
 UPDATE_SCRIPT=0
 # Operation mode: install or uninstall
 mode=install
-# Get script filename and directory (resolves symlinks)
-self=$(readlink -f "${BASH_SOURCE[0]}")
+# Get script filename and directory (resolves symlinks). BASH_SOURCE[0] is
+# empty when the script is piped in (curl | bash); keep $self empty then,
+# because readlink -f "" prints nothing with GNU coreutils but the current
+# directory with uutils coreutils (Ubuntu 26.04).
+self=""
+if [[ -n ${BASH_SOURCE[0]} ]]; then
+  self=$(readlink -f "${BASH_SOURCE[0]}")
+fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
 # Logfile
