@@ -27,6 +27,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  distro-detection:
+    name: Detect ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Official Linux Mint images; they ship Mint's own /etc/issue.net
+          # ("Linux Mint 21.3 Virginia", "LMDE 7 Gigi")
+          - name: Linux Mint 21.3
+            image: linuxmintd/mint21.3-amd64
+          - name: LMDE 7
+            image: linuxmintd/lmde7-amd64
+    container:
+      image: ${{ matrix.image }}
+    env:
+      TERM: xterm
+    steps:
+      - name: Install container prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates curl lsb-release procps
+      - uses: actions/checkout@v4
+      - name: Detect distro and list installed kernels
+        run: |
+          set -u
+          cat /etc/issue.net
+          rc=0
+          ./kernel_installer.sh --list-installed > /tmp/detect.log 2>&1 < /dev/null || rc=$?
+          cat /tmp/detect.log
+          if grep -qiE "unknown distro|not yet supported" /tmp/detect.log; then
+            echo "FAIL: $(cat /etc/issue.net) was not recognized"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "FAIL: --list-installed exited with $rc"
+            exit 1
+          fi
+          echo "OK: distro detected as Debian family"
+
   install:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

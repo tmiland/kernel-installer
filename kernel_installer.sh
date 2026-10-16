@@ -620,7 +620,9 @@ elif [[ -f /etc/os-release ]]; then
 fi
 
 case "$DISTRO" in
-  Debian*|Ubuntu*|LinuxMint*|PureOS*|Pop*|Devuan*)
+  # Linux Mint's /etc/issue.net reads "Linux Mint 22.3 Zena" (with a space)
+  # and LMDE's reads "LMDE 7 Gigi"
+  Debian*|Ubuntu*|LinuxMint*|"Linux Mint"*|LMDE*|PureOS*|Pop*|Devuan*)
     # shellcheck disable=SC2140
     PKGCMD="apt-get -o Dpkg::Progress-Fancy="1" install -qq"
     LSB=lsb-release
