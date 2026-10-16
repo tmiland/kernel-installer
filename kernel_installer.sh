@@ -112,7 +112,10 @@ SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/$SLIB_REV/src/slib.sh
 CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
 
 # Include functions
-if [[ -f $SCRIPT_DIR/src/slib.sh ]]; then
+# Only trust src/slib.sh next to the script when the script itself is a file.
+# When it is piped in (curl | bash), $self is empty and SCRIPT_DIR would be
+# the current directory, so a src/slib.sh there must not be sourced.
+if [[ -n $self && -f $SCRIPT_DIR/src/slib.sh ]]; then
   # shellcheck disable=SC1091
   . "$SCRIPT_DIR/src/slib.sh"
 else
