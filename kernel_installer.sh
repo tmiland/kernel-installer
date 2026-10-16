@@ -70,10 +70,14 @@ LIST_INSTALLED=${LIST_INSTALLED:-0}
 # Default Install dir (Default: /opt/linux)
 INSTALL_DIR=${INSTALL_DIR:-/opt/linux-kernel}
 INSTALL_DIR_MARKER=".kernel_installer"
+# kernel.org version banner, fetched once for all the lookups below and with
+# short timeouts: fetching it per lookup (3 x 4 attempts x 20s) made every
+# run, even --help, hang for over 4 minutes when kernel.org was unreachable.
+KERNEL_BANNER=$(curl -fsSL --connect-timeout 5 --max-time 10 --retry 1 --retry-delay 1 \
+  https://www.kernel.org/finger_banner 2>/dev/null)
 # https://stackoverflow.com/a/51068988
 latest_kernel() {
-  curl -fsSL --max-time 20 --retry 3 --retry-delay 2 https://www.kernel.org/finger_banner 2>/dev/null \
-    | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
+  printf '%s\n' "$KERNEL_BANNER" | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
 }
 # Default Kernel version
 STABLE_VER=$(latest_kernel stable)
