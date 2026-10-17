@@ -7,6 +7,10 @@ on:
         description: Kernel version to build and install
         required: false
         default: 6.12.112
+      mainline_version:
+        description: Mainline (-rc) version to build and install with --mainline
+        required: false
+        default: 7.3-rc7
   push:
     branches: [main]
     paths:
@@ -139,6 +143,81 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-${{ matrix.slug }}
+          path: /var/log/kernel_installer.log
+          if-no-files-found: ignore
+
+  mainline:
+    name: Mainline ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04 (noble)
+            image: ubuntu:24.04
+            slug: ubuntu-24.04
+          - name: Fedora 44
+            image: fedora:44
+            slug: fedora-44
+    container:
+      image: ${{ matrix.image }}
+    env:
+      # Pinned so the job does not follow whatever -rc kernel.org lists today;
+      # this exercises the git.kernel.org snapshot download and the -rc
+      # package version mangling (~rc for deb, _rc for rpm).
+      MAINLINE_VER: ${{ github.event.inputs.mainline_version || '7.3-rc7' }}
+      TERM: xterm
+    steps:
+      - name: Install container prerequisites
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y git ca-certificates procps-ng
+          else
+            apt-get update -qq
+            # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          fi
+      - uses: actions/checkout@v4
+      - name: Build and install mainline kernel ${{ env.MAINLINE_VER }}
+        run: ./kernel_installer.sh --mainline
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel_installer.log || true
+      - name: Verify installation
+        run: |
+          set -ux
+          # 7.3-rc7 builds kernel release 7.3.0-rc7 (SUBLEVEL is 0 on mainline)
+          base="${MAINLINE_VER%%-*}"
+          extra="${MAINLINE_VER#"$base"}"
+          case "$base" in *.*.*) ;; *) base="${base}.0" ;; esac
+          ver="${base}${extra}"
+          ls -la /boot/ || true
+          set -e
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -qa 'kernel*' | grep "${ver//-/_}" || true
+            rpm -q "kernel-${ver//-/_}" >/dev/null
+            rpm -q "kernel-devel-${ver//-/_}" >/dev/null
+            test -d "/usr/src/kernels/${ver}"
+            test -f "/boot/initramfs-${ver}.img"
+          else
+            dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
+            dpkg -s "linux-image-${ver}" >/dev/null
+            dpkg -s "linux-headers-${ver}" >/dev/null
+            test -d "/usr/src/linux-headers-${ver}"
+            test -f "/boot/initrd.img-${ver}"
+          fi
+          test -f "/boot/vmlinuz-${ver}"
+          test -f "/boot/config-${ver}"
+          test -d "/lib/modules/${ver}/kernel"
+          echo "Mainline kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-mainline-${{ matrix.slug }}
           path: /var/log/kernel_installer.log
           if-no-files-found: ignore
 

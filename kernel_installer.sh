@@ -87,8 +87,8 @@ latest_kernel() {
 }
 # Default Kernel version
 STABLE_VER=$(latest_kernel stable)
-# Mainline kernel version
-MAINLINE_VER=$(latest_kernel mainline)
+# Mainline kernel version (set MAINLINE_VER to pin a specific -rc, e.g. in CI)
+MAINLINE_VER=${MAINLINE_VER:-$(latest_kernel mainline)}
 # Lonterm kernel version
 LONGTERM_VER=$(latest_kernel longterm)
 # Default kernel version without arguments
@@ -1271,26 +1271,29 @@ install_kernel() {
     touch "$INSTALL_DIR/$INSTALL_DIR_MARKER"
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
-    if [ ! $LINUX_VER_NAME = "Mainline" ]; then
-      if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
+    if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
+      # get-verified-tarball function
+      if ! run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
+        log_error "Failed to download and verify the kernel tarball. Aborting."
+        exit 1
+      fi
+      log_success "Downloaded and verified ${TARGET}"
+      file_ext=xz
+    else
+      if [ "$LINUX_VER_NAME" = "Mainline" ]; then
+        # Kernel url 2 (Mainline)
+        # git.kernel.org snapshots are not signed, so they cannot go through
+        # get_verified_tarball and are always downloaded as-is
+        if [ "$GET_VERIFIED_TARBALL" = "1" ]; then
+          log_warning "Mainline snapshots are not signed; skipping tarball verification."
+        fi
+        kernel_url=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/snapshot/linux-"${LINUX_VER}".tar.gz
+        file_ext=gz
+      else
         # Kernel url 1 (Stable/longterm)
         kernel_url=https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/linux-"${LINUX_VER}".tar.xz
         file_ext=xz
-      else
-        # get-verified-tarball function
-        if ! run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
-          log_error "Failed to download and verify the kernel tarball. Aborting."
-          exit 1
-        fi
-        log_success "Downloaded and verified ${TARGET}"
-        file_ext=xz
       fi
-    else
-      # Kernel url 2 (Mainline)
-      kernel_url=https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/snapshot/linux-"${LINUX_VER}".tar.gz
-      file_ext=gz
-    fi
-    if [ ! "$GET_VERIFIED_TARBALL" = "1" ]; then
       if [ ! -f linux-"${LINUX_VER}".tar.$file_ext ]; then
         log_debug "Downloading Linux source code"
         run_ok "wget -c $kernel_url" "Downloading..."
@@ -1422,23 +1425,28 @@ install_kernel() {
   # Install through the package manager so that runtime dependencies of the
   # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
   # minimal systems, where a plain "dpkg -i" would fail.
+  # Package names carry the kernel release as-is, but package versions are
+  # rewritten for pre-releases: mkdebian turns -rcN into ~rcN (7.3.0~rc7-1)
+  # and kernel.spec turns - into _ (kernel-7.3.0_rc7-1), so the globs below
+  # match the name and the rpm version rather than the raw release string.
   if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    RPM_VER=${LINUX_FULL_VER//-/_}
     # binrpm-pkg writes kernel, kernel-devel and kernel-headers rpms to
     # <kernel tree>/rpmbuild/RPMS/<arch>/ (see scripts/package/kernel.spec)
-    if ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-${LINUX_FULL_VER}*.rpm" >/dev/null ||
-      ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-devel-${LINUX_FULL_VER}*.rpm" >/dev/null; then
+    if ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-${RPM_VER}-*.rpm" >/dev/null ||
+      ! compgen -G "./linux-${LINUX_VER}/rpmbuild/RPMS/*/kernel-devel-${RPM_VER}-*.rpm" >/dev/null; then
       log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
       exit 1
     fi
-    run_ok "${INSTALL} ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-\"${LINUX_FULL_VER}\"*.rpm ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-devel-\"${LINUX_FULL_VER}\"*.rpm" "Installing Kernel image and headers: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-\"${RPM_VER}\"-*.rpm ./linux-\"${LINUX_VER}\"/rpmbuild/RPMS/*/kernel-devel-\"${RPM_VER}\"-*.rpm" "Installing Kernel image and headers: ${LINUX_VER}"
   else
-    if ! compgen -G "./linux-headers-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null ||
-      ! compgen -G "./linux-image-${LINUX_FULL_VER}_${LINUX_FULL_VER}-*.deb" >/dev/null; then
+    if ! compgen -G "./linux-headers-${LINUX_FULL_VER}_*.deb" >/dev/null ||
+      ! compgen -G "./linux-image-${LINUX_FULL_VER}_*.deb" >/dev/null; then
       log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
       exit 1
     fi
-    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel headers: ${LINUX_VER}"
-    run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_\"${LINUX_FULL_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel headers: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image: ${LINUX_VER}"
   fi
   log_success "Installation finished"
   # else
