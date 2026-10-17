@@ -114,8 +114,8 @@ REPO_NAME="tmiland/kernel-installer"
 # commit the file), then scripts/update-slib.sh --finalize <commit> (phase 2:
 # pin SLIB_REV to the pushed commit and refresh SLIB_SHA256). The "slib pin"
 # CI job fails on main while the pin does not match src/slib.sh.
-SLIB_REV="ccc5128"
-SLIB_SHA256="65273825ae7ce562a2ab4906b17ea4a7f5af5325e77014c5e613ffdba0bcfe0b"
+SLIB_REV="b3ba718"
+SLIB_SHA256="b12a371e5449fc6659be56e6529dd3c580f0de6c453d0f53fd26a1f2dc28d800"
 # Functions url
 SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/$SLIB_REV/src/slib.sh
 # Set default configuration target
