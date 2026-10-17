@@ -157,13 +157,13 @@ jobs:
         run: |
           set -ux
           ver="${KERNEL_VERSION}"
-          # The uninstall run starts a new log; keep the install log for the artifact
-          cp /var/log/kernel_installer.log /tmp/kernel_installer.install.log
+          # --uninstall appends to the install log (only an install starts a
+          # new one), so show just the lines it adds
+          log_lines=$(wc -l < /var/log/kernel_installer.log)
           rc=0
           # yes answers apt's purge confirmation (dnf runs with -y)
           yes | ./kernel_installer.sh --uninstall -k "${ver}" || rc=$?
-          cat /var/log/kernel_installer.log || true
-          cp /tmp/kernel_installer.install.log /var/log/kernel_installer.log
+          tail -n +"$((log_lines + 1))" /var/log/kernel_installer.log || true
           test "$rc" -eq 0
           if command -v dnf >/dev/null 2>&1; then
             pkgs="kernel-${ver} kernel-devel-${ver}"
