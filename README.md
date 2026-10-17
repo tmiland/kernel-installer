@@ -48,15 +48,43 @@ Default zram compressor
 
 ### Download the script
 
+Download, review, then run as root:
+
+```bash
+curl -fsSLO https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh
+sudo bash kernel_installer.sh            # add options as needed, e.g. --stable
+```
+
 Quick install with default options:
 
 With Curl:
 ```bash
-curl -sSL https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | bash || exit 0
+curl -fsSL https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | sudo bash
 ```
 With Wget:
 ```bash
-wget -qO - https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | bash || exit 0
+wget -qO - https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | sudo bash
+```
+
+With options (e.g. `--stable`):
+```bash
+curl -fsSL https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh | sudo bash -s -- --stable
+```
+
+The installer must run as root: pipe into `sudo bash` (as above) or run
+`sudo bash kernel_installer.sh`. A run as a regular user exits immediately with a
+"must be run as root" error instead of prompting or installing anything.
+
+On systems without sudo, become root first. If the root password is not set:
+
+```bash
+sudo passwd root
+```
+
+Then:
+
+```bash
+su root
 ```
 
 When run outside a git checkout, a pinned and checksum-verified copy of the
@@ -219,21 +247,6 @@ tail -f /var/log/kernel_installer.log
     - Source: Run ok: [swelljoe/run_ok](https://github.com/swelljoe/run_ok)
     - Source: Slog: [swelljoe/slog](https://github.com/swelljoe/slog)
     - Source: Slib: [virtualmin/slib](https://github.com/virtualmin/slib)
-
-***Note: you will need to run this script as root***
-
-If root password is not set, type:
-
-```bash
-sudo passwd root
-```
-
-Then:
-
-```bash
-su root
-```
-
 
 **Full write-up on the blog:** https://tmiland.com/kernel-installer/
 ## Uninstall kernel

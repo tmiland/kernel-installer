@@ -57,6 +57,8 @@ if [[ -n ${BASH_SOURCE[0]} ]]; then
 fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
+# Original command-line arguments (diagnostics and the "run as root" hint)
+SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
 LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
 # Default processing units (all available)
@@ -317,7 +319,14 @@ ask() {
 chk_permissions() {
   # Only root can run this
   if [[ "$EUID" != 0 ]]; then
-    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_FILENAME} script must be run as root"
+    local hint
+    if [[ -n "$SCRIPT_FILENAME" ]]; then
+      hint="Run it again as root: sudo bash ${SCRIPT_FILENAME}${SCRIPT_ARGS:+ ${SCRIPT_ARGS}}"
+    else
+      # A piped run cannot rerun itself; $self is empty there on purpose
+      hint="Run it again as root: replace 'bash' with 'sudo bash' in the download command"
+    fi
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_FILENAME:-kernel_installer.sh} script must be run as root. ${hint}"
   fi
 }
 
@@ -786,6 +795,11 @@ case $CONFIG_OPTION in
     fi
     ;;
 esac
+
+# Fail fast without root: everything below (distro detection, the lsb-release
+# prompt and its package installation, the dependency checks) assumes root,
+# and a run piped through a one-liner must not get that far as a regular user.
+chk_permissions
 
 shopt -s nocasematch
 if [[ -f /etc/debian_version ]]; then
@@ -1499,7 +1513,7 @@ install_kernel() {
 }
 
 # Start Script
-chk_permissions
+# (the root check, chk_permissions, ran during argument parsing)
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
   if [ "$VER_SELECTED" != "1" ]; then
