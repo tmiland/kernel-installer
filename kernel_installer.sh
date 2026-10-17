@@ -293,10 +293,6 @@ is_safe_install_dir() {
   return 1
 }
 
-success() {
-  log_success "$1 Succeeded."
-}
-
 read_sleep() {
   read -rt "$1" <> <(:) || :
 }
