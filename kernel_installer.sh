@@ -377,6 +377,24 @@ chk_version() {
   fi
 }
 
+# Turn debug info off in .config (current directory = kernel tree).
+# From 5.18, "Debug information" is a choice (DEBUG_INFO_NONE,
+# DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT, DEBUG_INFO_DWARF4, DEBUG_INFO_DWARF5):
+# enabling NONE alone leaves e.g. Ubuntu's DWARF5=y in place, and with two
+# members at y olddefconfig keeps DWARF5, so every other member is disabled.
+# $1 = kernel version
+disable_debug_info() {
+  if [ "$(versionToInt "$1")" -ge "$(versionToInt 5.18)" ]; then
+    scripts/config --enable DEBUG_INFO_NONE \
+      --disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT \
+      --disable DEBUG_INFO_DWARF4 \
+      --disable DEBUG_INFO_DWARF5
+  else
+    scripts/config --set-val DEBUG_INFO n
+    scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
+  fi
+}
+
 versionToInt() {
   echo "$@" | awk -F "." '{ printf("%03d%03d%03d", $1,$2,$3); }';
 }
@@ -1311,18 +1329,7 @@ install_kernel() {
       read_sleep 1
       # Disable debug info since it's enabled by default
       if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
-        # DEBUG_INFO_NONE introduced in version 5.18
-        num1=$LINUX_VER # version to check if is greater than or equal to
-        num2=5.18 # required version
-        if [ "$(versionToInt $num1)" -ge "$(versionToInt $num2)" ]; then
-          # $num1 is greater than or equal to $num2
-          scripts/config --set-val DEBUG_INFO_NONE y
-          scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
-        else
-          # $num1 is lesser than $num2
-          scripts/config --set-val DEBUG_INFO n
-          scripts/config --set-val DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT n
-        fi
+        disable_debug_info "$LINUX_VER"
       fi
       if [ "$LOWLATENCY" = "1" ]; then
         # convert generic config to lowlatency
