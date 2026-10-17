@@ -236,7 +236,7 @@ report_build_failure() {
     # log lines written by this script ("[2026-01-01 12:00:00 CET] [ERROR] ..."),
     # also when run_ok appends one to its "message: " prefix
     /\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ [^]]*\] \[[A-Z]+\]/ { next }
-    $0 ~ missing || /internal compiler error|Killed signal terminated program|No space left on device|No rule to make target|fatal error:|undefined reference to|(^|[^[:alpha:]])error:/ {
+    $0 ~ missing || /internal compiler error|Killed signal terminated program|No space left on device|mktemp: .*failed to create|No rule to make target|fatal error:|undefined reference to|(^|[^[:alpha:]])error:/ {
       print NR; exit
     }' "$RUN_LOG" 2>/dev/null)
   echo
@@ -978,6 +978,9 @@ verify_fail() {
 
 # shellcheck disable=SC2329  # called by name through run_ok
 get_verified_tarball() {
+  # Keep the verify directory out of the environment: this function must not
+  # clobber an exported TMPDIR, whose value later build steps rely on (#48).
+  local TMPDIR
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
   # --------------------
@@ -1192,7 +1195,7 @@ get_verified_tarball() {
     return 1
   fi
   mv -f "${TXZFILE}" "${TARGET}"
-  rm -rf ${TMPDIR}
+  rm -rf "${TMPDIR}"
   echo
   log_success "Successfully downloaded and verified ${TARGET}"
 }

@@ -159,6 +159,22 @@ check "missing header: no missing-program hint" not_has "is not installed"
 report "$work/self.log" "$pre_lines"
 check "script's own log lines are not reported as the error" has "no error message was found"
 
+# 9. A TMPDIR that vanished mid-build: mktemp fails, and make's tail must not
+#    be quoted instead (#48, the local-TMPDIR regression)
+{
+  cat "$work/pre"
+  echo "  CC      kernel/fork.o"
+  echo "mktemp: failed to create file via template '/tmp/ki-tmpdir-test/linux-kernel/linux-tarball-verify.XXXXXX.untrusted/cpiolist.XXXXXX': No such file or directory"
+  echo "make[6]: *** [usr/Makefile:76: usr/initramfs_data.cpio] Error 1"
+  tail_noise
+  script_lines
+} > "$work/mktemp.log"
+mktemp_line=$(grep -n "failed to create file via template" "$work/mktemp.log" | cut -d: -f1)
+report "$work/mktemp.log" "$pre_lines"
+check "mktemp: reports the failed mktemp with its log line" has "line ${mktemp_line}):"
+check "mktemp: shows the mktemp line itself" has "failed to create file via template"
+check "mktemp: does not quote make's final tail as the error" not_has "bindeb-pkg] Error 2"
+
 # Call sites
 body=$(sed -n '/^install_kernel() {/,/^}/p' "$SCRIPT")
 # shellcheck disable=SC2016  # literal script text

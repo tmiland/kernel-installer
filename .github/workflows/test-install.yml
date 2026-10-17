@@ -83,26 +83,40 @@ jobs:
           - name: Debian 12 (bookworm)
             image: debian:12
             slug: debian-12
+            install_dir: ""
           - name: Debian 13 (trixie)
             image: debian:13
             slug: debian-13
+            install_dir: ""
           - name: Ubuntu 22.04 (jammy)
             image: ubuntu:22.04
             slug: ubuntu-22.04
+            install_dir: ""
           - name: Ubuntu 24.04 (noble)
             image: ubuntu:24.04
             slug: ubuntu-24.04
+            install_dir: --dir ki-build
           - name: Fedora 44
             image: fedora:44
             slug: fedora-44
+            install_dir: ""
     container:
       image: ${{ matrix.image }}
     env:
       KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12.112' }}
       TERM: xterm
+      # An exported TMPDIR must not be clobbered by the verified download and
+      # must still work for the build steps afterwards (#48). Container-local
+      # path on purpose: runner.temp is a host path, while this directory
+      # persists across the job's steps inside the container.
+      TMPDIR: /tmp/ki-tmp
+      # Ubuntu 24.04 exercises a relative --dir (#51); the other jobs use the
+      # default install directory.
+      INSTALL_DIR_ARG: ${{ matrix.install_dir }}
     steps:
       - name: Install container prerequisites
         run: |
+          mkdir -p "${TMPDIR:?}"
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng
           else
