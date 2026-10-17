@@ -131,7 +131,7 @@ jobs:
           uname -r
           echo "cpus: $(nproc), memory: $(free -h | awk '/Mem:/ {print $2}')"
       - name: Build and install kernel ${{ env.KERNEL_VERSION }}
-        run: ./kernel_installer.sh -k "${KERNEL_VERSION}"
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" ${INSTALL_DIR_ARG:-}
       - name: Show installer log on failure
         if: failure()
         run: |
@@ -165,6 +165,13 @@ jobs:
             test -d "/lib/modules/${ver}/kernel"
             test -d "/usr/src/linux-headers-${ver}"
             test -f "/boot/initrd.img-${ver}"
+          fi
+          if [ -n "${INSTALL_DIR_ARG:-}" ]; then
+            # --dir was given as a relative path (#51): it must have been
+            # resolved at argument parsing, before the build changes directory.
+            # The success path removes $INSTALL_DIR, so verify via the install
+            # log: the archive was downloaded under the invocation directory.
+            grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel_installer.log
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
       - name: Uninstall kernel ${{ env.KERNEL_VERSION }}

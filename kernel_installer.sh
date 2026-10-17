@@ -703,7 +703,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dir | -d) # Bash Space-Separated (e.g., --option argument)
       require_arg "$1" "${2:-}"
-      INSTALL_DIR="$2"/linux-kernel # Source: https://stackoverflow.com/a/14203146
+      # Make a relative path absolute while $PWD is still the invocation
+      # directory: install_kernel later cd's into INSTALL_DIR and still uses
+      # the full path, which would otherwise resolve twice.
+      INSTALL_DIR="$(realpath -m -- "$2")/linux-kernel" # Source: https://stackoverflow.com/a/14203146
       shift 2 # past option and value
       ;;
     --config | -c)
