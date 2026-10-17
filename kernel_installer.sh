@@ -204,6 +204,71 @@ require_arg() {
   fi
 }
 
+# Record the build environment at the top of the log, so a failure report
+# carries what is needed to diagnose it.
+log_diagnostics() {
+  local dir=$INSTALL_DIR
+  while [ ! -d "$dir" ] && [ "$dir" != "/" ]; do
+    dir=$(dirname "$dir")
+  done
+  log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
+  log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, config: ${CONFIG_OPTION}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: running kernel's config (base for olddefconfig/oldconfig): $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none, so arch defconfig is the base")"
+  log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
+  log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
+  log_debug "Diagnostics: disk free for ${INSTALL_DIR}: $(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 {printf "%d MiB on %s", $4 / 1024, $6}')"
+}
+
+# Explain a failed kernel build: show the first real error in the build
+# output instead of the tail, which only holds make's generic "Error 2" lines
+# (see issue #12). $1 = line count of $RUN_LOG before the build started.
+report_build_failure() {
+  local start=$1 line='' hint='' from='' first=''
+  # A shell or make could not run a program at all (dash, bash, make exec);
+  # unlike "fatal error: foo.h: No such file or directory", a missing header
+  local missing_cmd='^(/usr)?/bin/(ba|da)?sh: (line )?[0-9]+: .*not found$|^make([[][0-9]+[]])?: [^ ]+: No such file or directory$'
+  line=$(awk -v start="$start" -v missing="$missing_cmd" '
+    NR <= start { next }
+    /^dpkg-buildpackage: error:/ { next }
+    # log lines written by this script ("[2026-01-01 12:00:00 CET] [ERROR] ..."),
+    # also when run_ok appends one to its "message: " prefix
+    /\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ [^]]*\] \[[A-Z]+\]/ { next }
+    $0 ~ missing || /internal compiler error|Killed signal terminated program|No space left on device|No rule to make target|fatal error:|undefined reference to|(^|[^[:alpha:]])error:/ {
+      print NR; exit
+    }' "$RUN_LOG" 2>/dev/null)
+  echo
+  if [ -z "$line" ]; then
+    log_error "Kernel build failed, and no error message was found in the build output; see ${RUN_LOG}."
+  else
+    log_error "Kernel build failed. First error in the build output (${RUN_LOG}, line ${line}):"
+    # Two lines of context above (never from before the build), three below
+    from=$((line - 2 > start ? line - 2 : start + 1))
+    sed -n "${from},$((line + 3))p" "$RUN_LOG" | sed 's/^/    /'
+    first=$(sed -n "${line}p" "$RUN_LOG")
+    case "$first" in
+      *"internal compiler error"* | *"Killed signal terminated program"*)
+        hint="The compiler itself crashed or was killed (often for lack of memory); this is not a bug in the kernel source. Retry with fewer jobs (--nproc). If it fails in a different file each time, suspect RAM or overclocking; if it fails in the same place, try another kernel version or compiler."
+        ;;
+      *"No space left on device"*)
+        hint="The disk holding ${INSTALL_DIR} is full. Free some space or build elsewhere with --dir."
+        ;;
+      *".pem"* | *"certs/"*)
+        hint="The kernel configuration points at a certificate file that does not exist in the kernel.org source (distribution configs set CONFIG_SYSTEM_TRUSTED_KEYS / CONFIG_SYSTEM_REVOCATION_KEYS). Clear them with: --custom-config 'scripts/config --set-str SYSTEM_TRUSTED_KEYS \"\"' --custom-config 'scripts/config --set-str SYSTEM_REVOCATION_KEYS \"\"'"
+        ;;
+      *)
+        if [[ $first =~ $missing_cmd ]]; then
+          hint="A program the kernel build runs is not installed (it is named on the error line). Install it and run the script again."
+        fi
+        ;;
+    esac
+    if [ -n "$hint" ]; then
+      log_error "Hint: ${hint}"
+    fi
+  fi
+  log_error "The build tree is kept in ${INSTALL_DIR} for inspection (it is removed on the next run)."
+}
+
 # A directory is safe to reuse (and wipe) when it does not exist yet, is
 # empty, or was created by this installer in a previous run (marker present).
 is_safe_install_dir() {
@@ -1064,6 +1129,7 @@ install_kernel() {
   # log_debug "Install build dependencies required by the kernel build process"
   # run_ok "${BUILD_DEP} ${BUILD_DEP_PKGS}" "Installing build dependencies"
   log_success "Package Setup Finished"
+  log_diagnostics
 
   # Reap any clingy processes (like spinner forks)
   # get the parent pids (as those are the problem)
@@ -1127,7 +1193,8 @@ install_kernel() {
     log_debug "Phase 3 of 6: Linux source code Unpacking"
     printf "%s \\n" "${GREEN}▣▣${YELLOW}▣${CYAN}□□□${NORMAL} Phase ${YELLOW}3${NORMAL} of ${GREEN}6${NORMAL}: Unpacking Linux source code"
     log_debug "Unpacking Linux source code"
-    run_ok "tar xvf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..." #>>"${RUN_LOG}" 2>&1
+    # No -v: the file listing (~90,000 lines) used to bury the build output in the log
+    run_ok "tar xf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..."
     log_success "Unpacking finished"
     #)
   fi
@@ -1212,9 +1279,16 @@ install_kernel() {
       printf "%s \\n" "Go grab a coffee ☕ 😎 This may take a while..."
       # Add echo 5 to answer Default zram compressor as zstd
       if [[ $DISTRO_GROUP == "RHEL" ]]; then
-        run_ok "echo $DEF_COM_NUM | make binrpm-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+        build_target=binrpm-pkg
       else
-        run_ok "echo $DEF_COM_NUM | make bindeb-pkg -j${NPROC}" "Compiling The Linux Kernel source code..."
+        build_target=bindeb-pkg
+      fi
+      # Remember where the build output starts in the log, and handle a
+      # failure here (instead of run_ok's tail) to point at the real error
+      build_log_start=$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0)
+      if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
+        report_build_failure "$build_log_start"
+        exit 1
       fi
       log_success "Compiling finished"
       echo
@@ -1222,7 +1296,7 @@ install_kernel() {
       log_debug "Phase 6 of 6: Installation"
       printf "%s \\n" "${GREEN}▣▣▣▣▣${YELLOW}▣${NORMAL} Phase ${YELLOW}6${NORMAL} of ${GREEN}6${NORMAL}: Kernel Installation"
       cd - 1>/dev/null 2>&1 || exit 1
-    )
+    ) || exit 1 # a failed configure/build step ends the run here, not at phase 6
   fi
   # if [ $LINUX_VER_NAME = "Mainline" ]; then
 
