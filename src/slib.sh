@@ -14,9 +14,12 @@ cleanup () {
     for pid in $allpids; do
       kill "$pid" 1>/dev/null 2>&1
     done
-    tput sgr0
   fi
-  tput cnorm
+  # Only a terminal has a cursor and colors to restore
+  if [ "$INTERACTIVE_MODE" = "on" ]; then
+    tput sgr0
+    tput cnorm
+  fi
   return 1
 }
 # This tries to catch any exit, whether normal or forced (e.g. Ctrl-C)
@@ -97,10 +100,12 @@ SCRIPT_NAME="${SCRIPT_NAME#\./}"
 SCRIPT_NAME="${SCRIPT_NAME##/*/}"
 
 # Determines if we print colors or not
-if [ "$(tty -s)" ]; then
-    INTERACTIVE_MODE="off"
-else
+# "tty -s" prints nothing, so the old [ "$(tty -s)" ] test was always false
+# and output to a file or pipe got colors, spinner frames and tput errors.
+if [ -t 1 ]; then
     INTERACTIVE_MODE="on"
+else
+    INTERACTIVE_MODE="off"
 fi
 
 #--------------------------------------------------------------------------------------------------
@@ -313,9 +318,10 @@ run_ok () {
   # whole thing.
   local cmd="${1}"
   local msg="${2}"
-  local columns
-  columns=$(tput cols)
-  if [ "$columns" -ge 80 ]; then
+  local columns spinpid=''
+  # At most 79; also 79 when tput cannot tell (no TERM)
+  columns=$(tput cols 2>/dev/null)
+  if ! [ "$columns" -lt 80 ] 2>/dev/null; then
     columns=79
   fi
   # shellcheck disable=SC2004
@@ -328,22 +334,26 @@ run_ok () {
   # Unicode checkmark and x mark for run_ok function
   CHECK='\u2714'
   BALLOT_X='\u2718'
-  spinner &
-  spinpid=$!
-  allpids="$allpids $spinpid"
-  echo "Spin pid is: $spinpid" >> ${RUN_LOG}
+  # The spinner only makes sense on a terminal; in a file or pipe it is
+  # thousands of escape codes
+  if [ "$INTERACTIVE_MODE" = "on" ]; then
+    spinner &
+    spinpid=$!
+    allpids="$allpids $spinpid"
+  fi
   eval "${cmd}" 1>> ${RUN_LOG} 2>&1
   local res=$?
-  touch ${SPINNER_DONEFILE}
-  env sleep .2 # It's possible to have a race for stdout and spinner clobbering the next bit
-  # Just in case the spinner survived somehow, kill it.
-  pidcheck=$(ps --no-headers ${spinpid})
-  if [ -n "$pidcheck" ]; then
-    echo "Made it here...why?" >> ${RUN_LOG}
-    kill $spinpid 2>/dev/null
-    rm -rf ${SPINNER_DONEFILE} 2>/dev/null 2>&1
-    tput rc
-    tput cnorm
+  if [ -n "$spinpid" ]; then
+    touch ${SPINNER_DONEFILE}
+    env sleep .2 # It's possible to have a race for stdout and spinner clobbering the next bit
+    # Just in case the spinner survived somehow, kill it.
+    pidcheck=$(ps --no-headers ${spinpid})
+    if [ -n "$pidcheck" ]; then
+      kill $spinpid 2>/dev/null
+      rm -rf ${SPINNER_DONEFILE} 2>/dev/null 2>&1
+      tput rc
+      tput cnorm
+    fi
   fi
   # Log what we were supposed to be running
   printf "${msg}: " >> ${RUN_LOG}

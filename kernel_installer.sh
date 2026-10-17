@@ -57,8 +57,8 @@ if [[ -n ${BASH_SOURCE[0]} ]]; then
 fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
-# Logfile
-LOGFILE=/var/log/kernel_installer.log
+# Logfile (the previous install's log is kept as $LOGFILE.1)
+LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
 # Default processing units (all available)
 NPROC=${NPROC:-$(nproc)}
 # Console output level; ignore debug level messages.
@@ -267,6 +267,14 @@ report_build_failure() {
     fi
   fi
   log_error "The build tree is kept in ${INSTALL_DIR} for inspection (it is removed on the next run)."
+}
+
+# Start an install with an empty log and keep the previous one as
+# $LOGFILE.1, so a failed build's log survives the next run (#53).
+rotate_log() {
+  if [ -f "$LOGFILE" ]; then
+    mv -f "$LOGFILE" "$LOGFILE.1"
+  fi
 }
 
 # A directory is safe to reuse (and wipe) when it does not exist yet, is
@@ -783,11 +791,6 @@ case $CONFIG_OPTION in
     ;;
 esac
 
-# Start with a clean log
-if [[ -f $LOGFILE ]]; then
-  rm "$LOGFILE"
-fi
-
 shopt -s nocasematch
 if [[ -f /etc/debian_version ]]; then
   DISTRO=$(cat /etc/issue.net)
@@ -950,6 +953,20 @@ case "$DEFAULT_COMPRESSION" in
   ;;
 esac
 
+# Record why get_verified_tarball failed and remove its verification
+# directory (only once it was created: before that TMPDIR may be the user's).
+# get_verified_tarball runs under run_ok, whose output goes to the log, so it
+# must return instead of exiting: an exit there ended the whole run with
+# nothing on screen (#50). The caller shows VERIFY_ERROR.
+# shellcheck disable=SC2329  # only called from get_verified_tarball (see there)
+verify_fail() {
+  VERIFY_ERROR=$1
+  if [ -n "${verify_dir:-}" ]; then
+    rm -rf "$verify_dir"
+  fi
+}
+
+# shellcheck disable=SC2329  # called by name through run_ok
 get_verified_tarball() {
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
@@ -1023,15 +1040,17 @@ get_verified_tarball() {
   #     exit 1
   # fi
 
+  VERIFY_ERROR=''
+  verify_dir=''
   MAJOR="$(echo "${LINUX_VER}" | cut -d. -f1)"
   if [[ ${MAJOR} -lt 3 ]]; then
-    echo "This script only supports kernel v3.x.x and above"
-    exit 1
+    verify_fail "This script only supports kernel v3.x.x and above"
+    return 1
   fi
 
   if [[ ! -d ${TARGETDIR} ]]; then
-    echo "${TARGETDIR} does not exist"
-    exit 1
+    verify_fail "${TARGETDIR} does not exist"
+    return 1
   fi
 
   TARGET="${TARGETDIR}/linux-${LINUX_VER}.tar.xz"
@@ -1050,13 +1069,18 @@ get_verified_tarball() {
     GPGBIN="$(command -v gpg2 || command -v gpg)"
     GPGVBIN="$(command -v gpgv2 || command -v gpgv)"
     if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
-      fatal "Failed to install gpg or gpgv"
+      verify_fail "Failed to install gpg or gpgv"
+      return 1
     fi
     echo "done"
   fi
 
   # Let's make a safe temporary directory for intermediates
-  TMPDIR=$(mktemp -d "${TARGETDIR}"/linux-tarball-verify.XXXXXXXXX.untrusted)
+  if ! TMPDIR=$(mktemp -d "${TARGETDIR}"/linux-tarball-verify.XXXXXXXXX.untrusted); then
+    verify_fail "Could not create a temporary directory in ${TARGETDIR}"
+    return 1
+  fi
+  verify_dir=$TMPDIR
   log_debug "Using TMPDIR=${TMPDIR}"
   # Are we using a keyring?
   if [[ -z ${USEKEYRING} ]]; then
@@ -1080,9 +1104,8 @@ get_verified_tarball() {
       --locate-keys ${DEVKEYS} ${SHAKEYS}
     # If this returned non-0, we bail
     if [[ $? != "0" ]]; then
-      echo "Something went wrong fetching keys"
-      rm -rf ${TMPDIR}
-      exit 1
+      verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
+      return 1
     fi
     # Make a temporary keyring and set USEKEYRING to it
     USEKEYRING=${TMPDIR}/keyring.gpg
@@ -1114,17 +1137,15 @@ get_verified_tarball() {
   SHAFILE=${TMPDIR}/sha256sums.asc
   log_debug "Downloading the checksums file for linux-${LINUX_VER}"
   if ! ${CURLBIN} -sL -o ${SHAFILE} ${SHA}; then
-    fatal "Failed to download the checksums file"
-    rm -rf ${TMPDIR}
-    exit 1
+    verify_fail "Failed to download the checksums file"
+    return 1
   fi
   log_debug "Verifying the checksums file"
   COUNT=$(${GPGVBIN} --keyring=${SHAKEYRING} --status-fd=1 ${SHAFILE} \
     | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
   if [[ ${COUNT} -lt 2 ]]; then
-    fatal "FAILED to verify the sha256sums.asc file."
-    rm -rf ${TMPDIR}
-    exit 1
+    verify_fail "FAILED to verify the sha256sums.asc file."
+    return 1
   fi
   # Grab only the tarball we want from the full list
   SHACHECK=${TMPDIR}/sha256sums.txt
@@ -1134,27 +1155,22 @@ get_verified_tarball() {
   log_debug "Downloading the signature file for linux-${LINUX_VER}"
   SIGFILE=${TMPDIR}/linux-${LINUX_VER}.tar.asc
   if ! ${CURLBIN} -sL -o ${SIGFILE} ${SIG}; then
-    fatal "Failed to download the signature file"
-    rm -rf ${TMPDIR}
-    exit 1
+    verify_fail "Failed to download the signature file"
+    return 1
   fi
   log_debug "Downloading the XZ tarball for linux-${LINUX_VER}"
   TXZFILE=${TMPDIR}/linux-${LINUX_VER}.tar.xz
   if ! ${CURLBIN} -L -o ${TXZFILE} ${TXZ}; then
-    fatal "Failed to download the tarball"
-    rm -rf ${TMPDIR}
-    exit 1
+    verify_fail "Failed to download the tarball"
+    return 1
   fi
 
-  pushd ${TMPDIR} >/dev/null || exit
   log_debug "Verifying checksum on linux-${LINUX_VER}.tar.xz"
-  if ! ${SHA256SUMBIN} -c ${SHACHECK}; then
-    fatal "FAILED to verify the downloaded tarball checksum"
-    popd >/dev/null || exit
-    rm -rf ${TMPDIR}
-    exit 1
+  # sha256sum -c reads paths relative to the current directory
+  if ! (cd "${TMPDIR}" && ${SHA256SUMBIN} -c ${SHACHECK}); then
+    verify_fail "FAILED to verify the downloaded tarball checksum"
+    return 1
   fi
-  popd >/dev/null || exit
 
   echo
   log_debug "Verifying developer signature on the tarball"
@@ -1162,9 +1178,8 @@ get_verified_tarball() {
       | ${GPGVBIN} --keyring="${DEVKEYRING}" --status-fd=1 "${SIGFILE}" - \
     | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
   if [[ ${COUNT} -lt 2 ]]; then
-    fatal "FAILED to verify the tarball!"
-    rm -rf ${TMPDIR}
-    exit 1
+    verify_fail "FAILED to verify the tarball signature"
+    return 1
   fi
   mv -f "${TXZFILE}" "${TARGET}"
   rm -rf ${TMPDIR}
@@ -1209,7 +1224,9 @@ kexec_new_kernel() {
 }
 
 install_kernel() {
-  clear
+  if [ "$INTERACTIVE_MODE" = "on" ]; then
+    clear
+  fi
   header_logo
   log_info "Started installation log in $LOGFILE"
   echo
@@ -1276,10 +1293,10 @@ install_kernel() {
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
     if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
-      # get-verified-tarball function
-      if ! run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
-        log_error "Failed to download and verify the kernel tarball. Aborting."
-        exit 1
+      # get-verified-tarball function; handle a failure here (not in run_ok)
+      # so the reason is shown on screen
+      if ! RUN_ERRORS_FATAL='' run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
+        fatal "Failed to download and verify the kernel tarball: ${VERIFY_ERROR:-see the log for details}"
       fi
       log_success "Downloaded and verified ${TARGET}"
       file_ext=xz
@@ -1475,7 +1492,9 @@ install_kernel() {
   fi
 
   # Make sure the cursor is back (if spinners misbehaved)
-  tput cnorm
+  if [ "$INTERACTIVE_MODE" = "on" ]; then
+    tput cnorm
+  fi
   printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} All ${GREEN}6${NORMAL} phases finished successfully"
 
   if [ "$KEXEC" = "1" ]; then
@@ -1526,6 +1545,9 @@ if [ $LIST_INSTALLED == "1" ]; then
 fi
 
 # Install Kernel
+# Only an install starts a new log; --list-installed and --uninstall above
+# leave the last one in place
+rotate_log
 chk_version
 chk_kernel
 errors=$((0))
