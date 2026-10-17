@@ -897,7 +897,9 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # rpmbuild during `make binrpm-pkg`), rpm-build provides rpmbuild,
     # dracut/grubby let the kernel rpm scriptlets create the initramfs and
     # boot entry at install time. gawk: see the Debian list above.
-    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
+    # elfutils-devel provides libdw, required by the kernel.spec
+    # BuildRequires check on newer mainline kernels.
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
