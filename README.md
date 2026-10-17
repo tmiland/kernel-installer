@@ -4,7 +4,7 @@ Automatic install script for [The Linux kernel](https://www.kernel.org)
 Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 
 [![GitHub release](https://img.shields.io/github/release/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/releases)
-[![licence](https://img.shields.io/github/license/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/blob/master/LICENSE)
+[![licence](https://img.shields.io/github/license/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
 ![Bash](https://img.shields.io/badge/Language-SH-4EAA25.svg?style=for-the-badge)
 
 ### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions and the Fedora/RHEL family.
@@ -13,18 +13,21 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 
 ### Dependencies
 
-Will be installed when running script.
+Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison
+wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison debhelper dpkg-dev procps apt-transport-https libdw-dev
 # Fedora/RHEL
-wget curl git rsync ca-certificates procps-ng findutils which diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
+wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
 ```
+`gnupg` is also installed on demand when tarball verification needs `gpg`/`gpgv`, and `kexec-tools` when `--kexec` is used.
+
+On Debian-based systems `lsb-release` is required; the script offers to install it if it is missing.
 
 ### Notes
 
-- This script reverts bug #1086172 [Enable more ZRAM compression options by default](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172)
-  - Sets default compression to zstd, and enables support for the rest of the algorithms
+- This script reverts bug #1086172 [Enable more ZRAM compression options by default](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1086172) (kernel 6.12 and newer)
+  - Sets default compression to zstd (change it with `--default-compression`), and enables support for the rest of the algorithms
   - Options are:
 ```bash
 lz4 compression support (ZRAM_BACKEND_LZ4) [Y/n/?] y
@@ -86,19 +89,20 @@ For usage, run:
 ### Help output
 
 ```bash
-If called without arguments, installs stable kernel using /opt/linux
+Usage:  kernel_installer.sh [options]
+  If called without arguments, installs stable kernel 7.2.11 using /opt/linux-kernel
 
 --help                 |-h   display this help and exit
 --kernel               |-k   kernel version of choice
---stable               |-s   stable kernel version 6.15.6
---mainline             |-m   mainline kernel version 6.16-rc6
---longterm             |-l   longterm kernel version 6.12.38
+--stable               |-s   stable kernel version 7.2.11
+--mainline             |-m   mainline kernel version 7.3-rc7
+--longterm             |-l   longterm kernel version 6.18.57
 --dir                  |-d   install directory
 --kexec                |-x   load new kernel without reboot
 --config               |-c   set configuration target
 --custom-config        |-cc  set custom configuration directive, can be used multiple times
 --verbose              |-v   increase verbosity
---get-verified-tarball |-gvt cryptographically verify kernel tarball
+--get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
 --nproc                |-n   set the number of processing units to use
 --enable-debug-info    |-edi enable debug info
 --lowlatency           |-low convert generic config to lowlatency
@@ -108,6 +112,8 @@ If called without arguments, installs stable kernel using /opt/linux
 --update               |-upd check for script update
 --uninstall            |-u   uninstall kernel (use with -k option)
 ```
+
+The versions shown are looked up live from kernel.org each time the script runs.
 
 To use opt --kernel:
 ```bash
@@ -121,6 +127,7 @@ To use --dir opt:
 ```bash
 ./kernel_installer.sh --dir /path/to/dir
 ```
+The source is downloaded and built in a `linux-kernel` subdirectory (here `/path/to/dir/linux-kernel`, default `/opt/linux-kernel`), which is removed after a successful install. The script refuses to use a directory that is not empty unless it created it in a previous run.
 To load [kernel without reboot](https://linux.die.net/man/8/kexec):
 ```bash
 ./kernel_installer.sh --kexec
@@ -133,16 +140,19 @@ default is `olddefconfig`
 
 ### Configuration targets
 
+As listed by `make help` in the kernel source (7.3); older kernels may lack some of them.
+With the default `olddefconfig`, the kernel build picks up the running kernel's
+configuration (e.g. `/boot/config-$(uname -r)`) as the base when one is available.
+
 ```bash
 config          - Update current config utilising a line-oriented program
 nconfig         - Update current config utilising a ncurses menu based program
 menuconfig      - Update current config utilising a menu based program
-xconfig         - Update current config utilising a QT based front-end
-gconfig         - Update current config utilising a GTK based front-end
+xconfig         - Update current config utilising a Qt based front-end
+gconfig         - Update current config utilising a GTK+ based front-end
 oldconfig       - Update current config utilising a provided .config as base
 localmodconfig  - Update current config disabling modules not loaded
 localyesconfig  - Update current config converting local mods to core
-silentoldconfig - Same as oldconfig, but quietly, additionally update deps
 defconfig       - New config with default from ARCH supplied defconfig
 savedefconfig   - Save current config as ./defconfig (minimal config)
 allnoconfig     - New config where all options are answered with no
@@ -150,9 +160,12 @@ allyesconfig    - New config where all options are accepted with yes
 allmodconfig    - New config selecting modules when possible
 alldefconfig    - New config with all symbols set to default
 randconfig      - New config with random answer to all options
+yes2modconfig   - Change answers from yes to mod if possible
+mod2yesconfig   - Change answers from mod to yes if possible
+mod2noconfig    - Change answers from mod to no if possible
 listnewconfig   - List new options
-olddefconfig    - Same as silentoldconfig but sets new symbols to their default value
-kvmconfig       - Enable additional options for guest kernel support
+helpnewconfig   - List new options and help text
+olddefconfig    - Same as oldconfig but sets new symbols to their default value without prompting
 tinyconfig      - Configure the tiniest possible kernel
 ```
 
@@ -170,25 +183,34 @@ Note that `--custom-config` can be used multiple times like:
 ./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m" --custom-config "scripts/config --set-val CONFIG_KERNEL_ZSTD y"
 ```
 
-To use --get-verified-tarball:
-```bash
-./kernel_installer.sh --get-verified-tarball
-```
+### Tarball verification
+
+Stable, longterm and `--kernel` tarballs are cryptographically verified by default
+(`--get-verified-tarball` is accepted but no longer needed). The `sha256sums.asc`
+file is checked against the kernel.org autosigner key, and the tarball against
+the Linus Torvalds / Greg Kroah-Hartman signatures, fetched via WKD.
  - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
  - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
- - Installing dependencies `gnupg2` and `gpgv2` if not installed
+ - Installs `gnupg` if `gpg`/`gpgv` are not available
+ - Keys are kept in `$GNUPGHOME` (default `~/.gnupg`); run with `GNUPGHOME=` (empty) to use a throwaway keyring instead
+ - Mainline snapshots from git.kernel.org are not signed and are not verified
+
+To skip verification:
+```bash
+GET_VERIFIED_TARBALL=0 ./kernel_installer.sh
+```
 
 Used together:
 ```bash
-./kernel_installer.sh --stable --config menuconfig --kexec --dir /path/to/dir --get-verified-tarball
+./kernel_installer.sh --stable --config menuconfig --kexec --dir /path/to/dir
 ```
 
 Watch install log:
 ```bash
-tail -f ./kernel_installer.log
+tail -f /var/log/kernel_installer.log
 ```
 
-- installation log in kernel_installer.log
+- installation log in `/var/log/kernel_installer.log` (recreated on every run)
 - [./src/slib.sh](https://github.com/tmiland/kernel-installer/blob/main/src/slib.sh) function script is sourced remotely if not found locally
   - This script is a combination of functions for spinners, colors and logging
     - Source: Spinner: [swelljoe/spinner](https://github.com/swelljoe/spinner)
@@ -219,13 +241,14 @@ To uninstall previously installed kernel:
 ./kernel_installer.sh --uninstall --kernel 5.17.7
 ```
 
-- You will be prompted with a yes/no answer
+- The `linux-image-<version>` and `linux-headers-<version>` packages (Fedora/RHEL: `kernel-<version>` and `kernel-devel-<version>`) are removed
+- On Debian-based systems `apt` asks for confirmation; on Fedora/RHEL they are removed without a prompt
 
 ## Testing
 
 Tested and working on: Debian 12/13, Ubuntu 22.04/24.04 and Fedora 44 (see [test-install.yml](.github/workflows/test-install.yml))
 
-- See [kernel_installer.log](https://raw.githubusercontent.com/tmiland/kernel-installer/main/log/kernel_installer.log)
+- Each CI run uploads the installer log of every distro as a workflow artifact (`kernel-installer-logs-<distro>`) on the [Actions](https://github.com/tmiland/kernel-installer/actions/workflows/test-install.yml) page
 
 ## Maintenance
 
@@ -262,6 +285,6 @@ git add kernel_installer.sh && git commit -m 'chore: bump slib pin' && git push
 
 ### License
 
-[![MIT License Image](https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/MIT_logo.svg/220px-MIT_logo.svg.png)](https://github.com/tmiland/kernel-installer/blob/master/LICENSE)
+[![MIT License Image](https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/MIT_logo.svg/220px-MIT_logo.svg.png)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
 
-[MIT License](https://github.com/tmiland/kernel-installer/blob/master/LICENSE)
+[MIT License](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
