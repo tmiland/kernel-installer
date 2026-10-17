@@ -224,6 +224,22 @@ read_sleep() {
   read -rt "$1" <> <(:) || :
 }
 
+# Read the user's answer into variable $1; the remaining arguments go to read
+# (e.g. -p prompt). When the script itself is piped in (curl | bash, $self is
+# empty), stdin is the rest of the script, so read from the terminal instead
+# and leave the answer empty if there is none. Otherwise read stdin as usual,
+# so answers can still be piped in (yes | ./kernel_installer.sh ...).
+ask() {
+  local __var=$1 __reply=''
+  shift
+  if [ -n "$self" ]; then
+    read -r "$@" __reply
+  elif { : </dev/tty; } 2>/dev/null; then
+    read -r "$@" __reply </dev/tty
+  fi
+  printf -v "$__var" '%s' "$__reply"
+}
+
 # Make sure that the script runs with root permissions
 chk_permissions() {
   # Only root can run this
@@ -242,7 +258,7 @@ chk_kernel() {
   fi
   if [ "$CURRENT_VER" = "${LINUX_VER}" ] || ${PKGCHK} "${kernel_pkg}" >/dev/null 2>&1; then
     echo
-    read -rp "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: " -e YESNO
+    ask YESNO -e -p "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: "
     case ${YESNO,,} in
       y | yes) return ;;
       *)
@@ -403,7 +419,7 @@ update_updater () {
     if [ $UPDATE_SCRIPT = "1" ]; then
       show_update_banner
       echo -e "${RED}${ARROW} Do you want to update [Y/N?]${NORMAL}"
-      read -p "" -n 1 -r
+      ask REPLY -n 1
       echo -e "\n\n"
       if [[ $REPLY =~ ^[Yy]$ ]]; then
         if [ -z "$tmpfile" ]; then
@@ -655,7 +671,7 @@ if [[ $DISTRO_GROUP != "RHEL" ]] && ! lsb_release -si 1>/dev/null 2>&1; then
   echo ""
   echo -e "${RED}${BALLOT_X} Looks like ${LSB} is not installed!${NORMAL}"
   echo ""
-  read -r -p "Do you want to download ${LSB}? [y/n]? " ANSWER
+  ask ANSWER -p "Do you want to download ${LSB}? [y/n]? "
   echo ""
   case $ANSWER in
     [Yy]* )
