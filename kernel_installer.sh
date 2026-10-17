@@ -381,6 +381,25 @@ versionToInt() {
   echo "$@" | awk -F "." '{ printf("%03d%03d%03d", $1,$2,$3); }';
 }
 
+# Distribution configs copied from /boot (Ubuntu, Mint) point the trusted
+# and revoked key lists at certificate files from the distribution's own
+# kernel tree (debian/canonical-certs.pem), so a kernel.org tree stops with
+# "No rule to make target". Clear a key list whose file does not exist;
+# paths are relative to the kernel source tree (the current directory).
+clear_missing_cert_keys() {
+  local key cert
+  for key in SYSTEM_TRUSTED_KEYS SYSTEM_REVOCATION_KEYS; do
+    cert=$(scripts/config --state "$key")
+    case "$cert" in
+      "" | n | undef) continue ;;
+    esac
+    if [ ! -f "$cert" ]; then
+      log_warning "CONFIG_${key} points at ${cert}, which is not in the kernel source; clearing it."
+      scripts/config --set-str "$key" ""
+    fi
+  done
+}
+
 changelog() {
   curl -s https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/ChangeLog-${LINUX_VER} | less
 }
@@ -834,7 +853,10 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # resolve on newer releases, and "paxctl" was removed from the archive.
   # cpio/kmod are required by the kernel's Build-Depends-Arch (mkdebian),
   # enforced by dpkg-checkbuilddeps during `make bindeb-pkg`.
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison debhelper dpkg-dev procps apt-transport-https libdw-dev"
+  # gawk: the build runs it by name for CONFIG_BUILTIN_MODULE_RANGES
+  # (scripts/Makefile.vmlinux), which Ubuntu configs enable; Debian and
+  # Ubuntu only ship mawk by default.
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -854,8 +876,8 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # bc/binutils/... mirror the kernel.spec BuildRequires (enforced by
     # rpmbuild during `make binrpm-pkg`), rpm-build provides rpmbuild,
     # dracut/grubby let the kernel rpm scriptlets create the initramfs and
-    # boot entry at install time.
-    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
+    # boot entry at install time. gawk: see the Debian list above.
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
@@ -1340,6 +1362,8 @@ install_kernel() {
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
       done
+      # After --custom-config, so a certificate the user provides is kept
+      clear_missing_cert_keys
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
