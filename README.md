@@ -16,7 +16,7 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev
+wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3
 # Fedora/RHEL
 wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
 ```
