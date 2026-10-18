@@ -11,6 +11,12 @@ on:
         description: Mainline (-rc) version to build and install with --mainline
         required: false
         default: 7.3-rc7
+  schedule:
+    # Weekly, off the hour (#43): the kernel.org stable release moves on its
+    # own, so a new kernel that breaks the build must show up without anyone
+    # opening a PR. The pinned jobs below are skipped for this event; their
+    # coverage is the point of the latest-install jobs instead.
+    - cron: '23 5 * * 1'
   push:
     branches: [main]
     paths:
@@ -27,12 +33,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-install-${{ github.ref }}
+  # The event name keeps the weekly schedule from cancelling an in-flight
+  # main/PR run that shares this ref (#43).
+  group: test-install-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
   distro-detection:
     name: Detect ${{ matrix.name }}
+    # A scheduled run covers current-stable installs only (#43); detection
+    # against the official Mint/LMDE images still runs for main and PRs.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -74,6 +85,9 @@ jobs:
 
   install:
     name: ${{ matrix.name }}
+    # Pinned to one version on purpose so PR checks stay reproducible; the
+    # scheduled run defers to latest-install instead (#43).
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -210,6 +224,7 @@ jobs:
 
   mainline:
     name: Mainline ${{ matrix.name }}
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -285,6 +300,7 @@ jobs:
 
   custom-config-smoke:
     name: Custom config smoke test
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     container:
@@ -336,5 +352,113 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-custom-config-smoke
+          path: /var/log/kernel_installer.log
+          if-no-files-found: ignore
+
+  # Issue #43: every other job here passes -k, --mainline or --custom-config,
+  # so none of them installs the way a user does -- and a Fedora install of a
+  # *current* kernel broke with no job noticing. These jobs run
+  # `./kernel_installer.sh` with no arguments at all, which installs whatever
+  # kernel.org calls stable at that moment.
+  latest-install:
+    name: Latest stable ${{ matrix.name }}
+    # Scheduled weekly and runnable by hand, but deliberately not part of PR
+    # checks: those stay reproducible and independent of kernel.org's current
+    # release. Runs from the default branch's copy of this file.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Fedora 44
+            image: fedora:44
+            slug: fedora-44
+          - name: Debian 13 (trixie)
+            image: debian:13
+            slug: debian-13
+    container:
+      image: ${{ matrix.image }}
+    env:
+      TERM: xterm
+      # Same container-local TMPDIR as the pinned install jobs (#48): an
+      # exported TMPDIR must not be clobbered by the verified download.
+      TMPDIR: /tmp/ki-tmp
+    steps:
+      - name: Install container prerequisites
+        run: |
+          mkdir -p "${TMPDIR:?}"
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y git ca-certificates procps-ng
+          else
+            apt-get update -qq
+            # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          fi
+      - uses: actions/checkout@v4
+      - name: Show environment
+        run: |
+          cat /etc/os-release
+          uname -r
+          echo "cpus: $(nproc), memory: $(free -h | awk '/Mem:/ {print $2}')"
+      - name: Build and install the current stable kernel (no arguments)
+        run: ./kernel_installer.sh
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel_installer.log || true
+      - name: Verify installation
+        run: |
+          set -ux
+          # No version was requested, so read the installed release back from
+          # the build output rather than assuming one.
+          set -- /boot/vmlinuz-*
+          if [ "$#" -ne 1 ]; then
+            echo "FAIL: expected exactly one /boot/vmlinuz-*, found $#"
+            exit 1
+          fi
+          ver="${1##*/vmlinuz-}"
+          echo "Installed kernel release: ${ver}"
+          case "$ver" in
+            *.*.*) ;;
+            *) echo "FAIL: '${ver}' is not an x.y.z release"; exit 1 ;;
+          esac
+          if [ "$ver" = "6.12.112" ]; then
+            echo "FAIL: the no-argument install used the pinned 6.12.112, not current stable"
+            exit 1
+          fi
+          # The release that was built must be the one that was downloaded and
+          # PGP-verified, not something the packaging layer rewrote.
+          grep -q "Downloaded and verified .*linux-${ver}\.tar\.xz" /var/log/kernel_installer.log
+          if command -v dnf >/dev/null 2>&1; then
+            rpm -qa 'kernel*' | grep "${ver}" || true
+            ls -la /boot/ || true
+            ls "/lib/modules/${ver}/kernel" | head || true
+            set -e
+            rpm -q "kernel-${ver}" >/dev/null
+            rpm -q "kernel-devel-${ver}" >/dev/null
+            test -d "/usr/src/kernels/${ver}"
+            test -f "/boot/initramfs-${ver}.img"
+          else
+            dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
+            ls -la /boot/ || true
+            ls "/lib/modules/${ver}/kernel" | head || true
+            set -e
+            dpkg -s "linux-image-${ver}" >/dev/null
+            dpkg -s "linux-headers-${ver}" >/dev/null
+            test -d "/usr/src/linux-headers-${ver}"
+            test -f "/boot/initrd.img-${ver}"
+          fi
+          test -f "/boot/vmlinuz-${ver}"
+          test -f "/boot/config-${ver}"
+          test -d "/lib/modules/${ver}/kernel"
+          echo "Current stable kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-latest-${{ matrix.slug }}
           path: /var/log/kernel_installer.log
           if-no-files-found: ignore
