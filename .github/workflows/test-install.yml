@@ -389,12 +389,16 @@ jobs:
       - name: Install container prerequisites
         run: |
           mkdir -p "${TMPDIR:?}"
+          # curl is required here: with no arguments the installer resolves the
+          # current stable version from kernel.org (#43), and debian:13 ships
+          # neither curl nor wget, which made the run fail as a bogus "check
+          # your network connection" error.
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng
+            dnf install -y git ca-certificates procps-ng curl
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools curl
           fi
       - uses: actions/checkout@v4
       - name: Show environment
