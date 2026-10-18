@@ -892,7 +892,11 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # gawk: the build runs it by name for CONFIG_BUILTIN_MODULE_RANGES
   # (scripts/Makefile.vmlinux), which Ubuntu configs enable; Debian and
   # Ubuntu only ship mawk by default.
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev"
+  # python3: scripts/package/mkdebian lists python3:native in
+  # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
+  # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
+  # ship python3 (it was reported as an unmet build dependency on 7.2.11).
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
