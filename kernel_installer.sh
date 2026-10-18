@@ -362,6 +362,50 @@ installed_kernel_pkg() {
   return 1
 }
 
+# Kernel release the configured tree builds, CONFIG_LOCALVERSION included
+# (6.12.113-test). mkdebian and kernel.spec name the packages after exactly
+# this release, so it is what the install path has to follow (#49). Prints
+# nothing and returns non-zero when the tree cannot answer (not configured
+# yet, no Makefile).
+built_kernelrelease() {
+  local release
+  release=$(cd "$1" 2>/dev/null && make -s kernelrelease 2>/dev/null) || return 1
+  [[ -n $release ]] || return 1
+  printf '%s\n' "$release"
+}
+
+# Kernel release derived from the top-level Makefile,
+# VERSION.PATCHLEVEL.SUBLEVEL+EXTRAVERSION. It carries the -rc suffix
+# (7.3-rc7 -> 7.3.0-rc7) but not CONFIG_LOCALVERSION, which only the
+# configured tree knows (#49).
+get_linux_full_ver() {
+  # SUBLEVEL is always present in the Makefile (VERSION and PATCHLEVEL are on
+  # the first line, SUBLEVEL on the third, so awk always has $3)
+  awk '/^VERSION =/ { v = $3 } /^PATCHLEVEL =/ { p = $3 } /^SUBLEVEL =/ { s = $3 }
+       /^EXTRAVERSION =/ { x = $3 } END { print v "." p "." s x }' "$1"
+}
+
+# Installed kernel packages named <name>-<release> plus a localversion suffix
+# (linux-image-6.12.113-test). The suffix is a config decision of the build
+# that installed them, so it can only be found by matching the installed
+# packages against the release prefix (#49). Every match is printed on its own
+# line; a following digit is not a suffix but a different version.
+installed_kernel_pkgs_localversion() {
+  local name=$1 release=$2 pattern installed
+  local -a grep_args=()
+  pattern="${name}-${release}"
+  pattern=${pattern//./\\.}
+  grep_args=(-E -e "^${pattern}([^0-9].*)?$")
+  if [[ $DISTRO_GROUP == "RHEL" ]]; then
+    # The rpm version has - rewritten to _ (kernel-6.12.113_test)
+    grep_args+=(-e "^${pattern//-/_}([^0-9].*)?$")
+    installed=$(rpm -qa 2>/dev/null || true)
+  else
+    installed=$(dpkg-query -f '${binary:Package}\n' -W 2>/dev/null || true)
+  fi
+  grep "${grep_args[@]}" <<<"$installed" | sort -u
+}
+
 chk_kernel() {
   # Check if kernel is installed, abort if same version is found
   local release image_pkg
@@ -371,6 +415,11 @@ chk_kernel() {
   else
     image_pkg=linux-image
   fi
+  # Only exact names are matched here: a kernel built with a localversion is
+  # installed as <release><suffix> (6.12.113-test), and a prefix match would
+  # also catch unrelated distribution kernels (6.12.113-generic, -300.fc44),
+  # aborting on a build that installs next to them (#49). Pass the full
+  # release (-k 6.12.113-test) to have it recognised.
   if [ "$CURRENT_VER" = "$release" ] || installed_kernel_pkg "$image_pkg" "$release" >/dev/null; then
     echo
     ask YESNO -e -p "${YELLOW}Linux kernel ${LINUX_VER} is already installed, install anyways?${NORMAL} [y/N]: "
@@ -805,37 +854,80 @@ esac
 chk_permissions
 
 shopt -s nocasematch
-if [[ -f /etc/debian_version ]]; then
-  DISTRO=$(cat /etc/issue.net)
-elif [[ -f /etc/redhat-release ]]; then
-  DISTRO=$(cat /etc/redhat-release)
-elif [[ -f /etc/os-release ]]; then
-  DISTRO=$(cat < /etc/os-release | grep "PRETTY_NAME" | sed 's/PRETTY_NAME=//g' | sed 's/["]//g' | awk '{print $1}')
-fi
 
-case "$DISTRO" in
-  # Linux Mint's /etc/issue.net reads "Linux Mint 22.3 Zena" (with a space)
-  # and LMDE's reads "LMDE 7 Gigi"
-  Debian*|Ubuntu*|LinuxMint*|"Linux Mint"*|LMDE*|PureOS*|Pop*|Devuan*)
-    # shellcheck disable=SC2140
-    PKGCMD="apt-get -o Dpkg::Progress-Fancy="1" install -qq"
-    LSB=lsb-release
-    DISTRO_GROUP=Debian
-    ;;
-  CentOS*|Rocky*|AlmaLinux*|Fedora*|Red*)
-    # Fedora and the RHEL family (RHEL, Rocky, AlmaLinux, CentOS Stream)
-    PKGCMD="dnf install -y"
-    LSB=redhat-lsb-core
-    DISTRO_GROUP=RHEL
-    ;;
-  Arch*|Manjaro*)
-    PKGCMD="yes | LC_ALL=en_US.UTF-8 pacman -S"
-    LSB=lsb-release
-    DISTRO_GROUP=Arch
+# Distro detection reads /etc/os-release, the file meant for programs to read
+# (#47). The Debian family used to be matched on /etc/issue.net instead, which
+# is a login banner an admin is free to replace: a customized banner on an
+# otherwise supported system ended in "unknown distro". Matching ID/ID_LIKE
+# also covers derivatives the old name list missed.
+OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
+
+# Print the value of <key> from os-release, without the surrounding quotes.
+os_release_value() {
+  local line
+  line=$(grep -m1 "^$1=" "$OS_RELEASE_FILE" 2>/dev/null) || return 0
+  line=${line#*=}
+  line=${line#\"}
+  line=${line%\"}
+  printf '%s' "$line"
+}
+
+# Sets DISTRO (used in messages), DISTRO_GROUP, PKGCMD and LSB. Returns
+# non-zero for a distro that is not supported yet, leaving DISTRO_GROUP set to
+# the family it belongs to (Arch) or to "unknown".
+detect_distro() {
+  local os_id os_like pretty ids
+  os_id=$(os_release_value ID)
+  os_like=$(os_release_value ID_LIKE)
+  pretty=$(os_release_value PRETTY_NAME)
+  if [[ -z $os_id && -z $os_like ]]; then
+    # No os-release (very old systems): fall back to the release files
+    if [[ -f /etc/debian_version ]]; then
+      os_id=debian
+    elif [[ -f /etc/redhat-release ]]; then
+      os_id=$(tr '[:upper:]' '[:lower:]' < /etc/redhat-release)
+    fi
+    DISTRO=${pretty:-$(cat /etc/issue.net 2>/dev/null)}
+  else
+    DISTRO=${pretty:-$os_id}
+  fi
+  # ID and ID_LIKE hold space-separated lists of IDs: match whole words, so
+  # that e.g. "opensuse-leap" is not taken for Arch
+  ids=" ${os_id,,} ${os_like,,} "
+  case "$ids" in
+    *" debian "* | *" ubuntu "*)
+      # shellcheck disable=SC2140
+      PKGCMD="apt-get -o Dpkg::Progress-Fancy="1" install -qq"
+      LSB=lsb-release
+      DISTRO_GROUP=Debian
+      ;;
+    # Fedora and the RHEL family (RHEL, Rocky, AlmaLinux, CentOS Stream,
+    # Oracle Linux)
+    *" rhel "* | *" fedora "* | *" centos "* | *" rocky "* | *" almalinux "*)
+      PKGCMD="dnf install -y"
+      LSB=redhat-lsb-core
+      DISTRO_GROUP=RHEL
+      ;;
+    *" arch "*)
+      PKGCMD="yes | LC_ALL=en_US.UTF-8 pacman -S"
+      LSB=lsb-release
+      DISTRO_GROUP=Arch
+      return 1
+      ;;
+    *)
+      DISTRO_GROUP=unknown
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+if ! detect_distro; then
+  if [[ $DISTRO_GROUP == "Arch" ]]; then
     echo -e "${RED}${BALLOT_X} distro not yet supported: '$DISTRO'${NORMAL}" ; exit 1
-    ;;
-  *) echo -e "${RED}${BALLOT_X} unknown distro: '$DISTRO'${NORMAL}" ; exit 1 ;;
-esac
+  fi
+  echo -e "${RED}${BALLOT_X} unknown distro: '$DISTRO'${NORMAL}" ; exit 1
+fi
 # lsb_release is only needed to verify the install on Debian; the Fedora/RHEL
 # family is detected via /etc/redhat-release and no longer ships lsb_release.
 if [[ $DISTRO_GROUP != "RHEL" ]] && ! lsb_release -si 1>/dev/null 2>&1; then
@@ -1443,21 +1535,26 @@ install_kernel() {
   LINUX_VER_FILE="$INSTALL_DIR"/linux-"${LINUX_VER}"/Makefile
   LINUX_VER_FINAL_FILE="$INSTALL_DIR"/linux_full_ver
 
-  get_linux_full_ver() {
-    # shellcheck disable=SC2046
-    echo $(
-      sed -n '2 s/.*VERSION *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '3 s/.*PATCHLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '4 s/.*SUBLEVEL *= *\([^ ]*.*\)/\1/p' "$1"
-      sed -n '5 s/.*EXTRAVERSION *= *\([^ ]*.*\)/\1/p' "$1"
-    )
-  }
   # Grab version numbers from Makefile > Output to final version file
   get_linux_full_ver "$LINUX_VER_FILE" > "$LINUX_VER_FINAL_FILE"
   # Strip spaces on the first two and add a . then just stript the last space
   sed -i 's/  */./;s/  */./;s/ //g' "$LINUX_VER_FINAL_FILE"
   # Final version should look like 5.18.0-rc7
   LINUX_FULL_VER=$(cat "$LINUX_VER_FINAL_FILE")
+
+  # mkdebian and kernel.spec name the packages after the release the configured
+  # tree builds, CONFIG_LOCALVERSION included (6.12.113-test). The Makefile
+  # alone does not know the localversion, so ask the tree and fall back to the
+  # guessed release only when it cannot answer yet (#49).
+  if BUILT_KERNELRELEASE=$(built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"); then
+    if [[ $BUILT_KERNELRELEASE != "$LINUX_FULL_VER" ]]; then
+      log_debug "Kernel release from the tree: ${BUILT_KERNELRELEASE} (Makefile gives ${LINUX_FULL_VER})"
+    fi
+    LINUX_FULL_VER=$BUILT_KERNELRELEASE
+  else
+    LINUX_FULL_VER=$(kernel_release "$LINUX_FULL_VER")
+  fi
+  log_info "Kernel release: ${LINUX_FULL_VER}"
   # Install
   # Install through the package manager so that runtime dependencies of the
   # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
@@ -1540,8 +1637,32 @@ if [ "$mode" = "uninstall" ]; then
     fi
   done
   if [ ${#uninstall_pkgs[@]} -eq 0 ]; then
-    log_error "No installed kernel packages found for ${LINUX_VER} (release ${uninstall_release})."
-    exit 1
+    # Nothing named exactly <release>: the installed kernel may have been built
+    # with a CONFIG_LOCALVERSION suffix (6.12.113-test), which --uninstall
+    # cannot see before any build (#49). Offer those packages instead of
+    # failing, but only after the user confirms which ones to remove.
+    uninstall_localversion=()
+    for name in $uninstall_names; do
+      while IFS= read -r pkg; do
+        [ -n "$pkg" ] && uninstall_localversion+=("$pkg")
+      done < <(installed_kernel_pkgs_localversion "$name" "$uninstall_release")
+    done
+    if [ ${#uninstall_localversion[@]} -gt 0 ]; then
+      echo -e "${YELLOW}No packages named exactly ${uninstall_release}.${NORMAL}"
+      echo -e "${YELLOW}Installed kernel packages that match it:${NORMAL}"
+      printf '  %s\n' "${uninstall_localversion[@]}"
+      ask YESNO -e -p "${YELLOW}Remove them?${NORMAL} [y/N]: "
+      case ${YESNO,,} in
+        y | yes) uninstall_pkgs=("${uninstall_localversion[@]}") ;;
+        *)
+          log_error "No installed kernel packages found for ${LINUX_VER} (release ${uninstall_release})."
+          exit 1
+          ;;
+      esac
+    else
+      log_error "No installed kernel packages found for ${LINUX_VER} (release ${uninstall_release})."
+      exit 1
+    fi
   fi
   if [[ $DISTRO_GROUP == "RHEL" ]]; then
     ${UNINSTALL} "${uninstall_pkgs[@]}"
