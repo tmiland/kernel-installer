@@ -57,6 +57,8 @@ if [[ -n ${BASH_SOURCE[0]} ]]; then
 fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
+# Original command-line arguments (diagnostics and the "run as root" hint)
+SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
 LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
 # Default processing units (all available)
@@ -234,7 +236,7 @@ report_build_failure() {
     # log lines written by this script ("[2026-01-01 12:00:00 CET] [ERROR] ..."),
     # also when run_ok appends one to its "message: " prefix
     /\[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9:]+ [^]]*\] \[[A-Z]+\]/ { next }
-    $0 ~ missing || /internal compiler error|Killed signal terminated program|No space left on device|No rule to make target|fatal error:|undefined reference to|(^|[^[:alpha:]])error:/ {
+    $0 ~ missing || /internal compiler error|Killed signal terminated program|No space left on device|mktemp: .*failed to create|No rule to make target|fatal error:|undefined reference to|(^|[^[:alpha:]])error:/ {
       print NR; exit
     }' "$RUN_LOG" 2>/dev/null)
   echo
@@ -293,10 +295,6 @@ is_safe_install_dir() {
   return 1
 }
 
-success() {
-  log_success "$1 Succeeded."
-}
-
 read_sleep() {
   read -rt "$1" <> <(:) || :
 }
@@ -321,7 +319,14 @@ ask() {
 chk_permissions() {
   # Only root can run this
   if [[ "$EUID" != 0 ]]; then
-    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_FILENAME} script must be run as root"
+    local hint
+    if [[ -n "$SCRIPT_FILENAME" ]]; then
+      hint="Run it again as root: sudo bash ${SCRIPT_FILENAME}${SCRIPT_ARGS:+ ${SCRIPT_ARGS}}"
+    else
+      # A piped run cannot rerun itself; $self is empty there on purpose
+      hint="Run it again as root: replace 'bash' with 'sudo bash' in the download command"
+    fi
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} The ${SCRIPT_FILENAME:-kernel_installer.sh} script must be run as root. ${hint}"
   fi
 }
 
@@ -698,7 +703,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dir | -d) # Bash Space-Separated (e.g., --option argument)
       require_arg "$1" "${2:-}"
-      INSTALL_DIR="$2"/linux-kernel # Source: https://stackoverflow.com/a/14203146
+      # Make a relative path absolute while $PWD is still the invocation
+      # directory: install_kernel later cd's into INSTALL_DIR and still uses
+      # the full path, which would otherwise resolve twice.
+      INSTALL_DIR="$(realpath -m -- "$2")/linux-kernel" # Source: https://stackoverflow.com/a/14203146
       shift 2 # past option and value
       ;;
     --config | -c)
@@ -790,6 +798,11 @@ case $CONFIG_OPTION in
     fi
     ;;
 esac
+
+# Fail fast without root: everything below (distro detection, the lsb-release
+# prompt and its package installation, the dependency checks) assumes root,
+# and a run piped through a one-liner must not get that far as a regular user.
+chk_permissions
 
 shopt -s nocasematch
 if [[ -f /etc/debian_version ]]; then
@@ -968,6 +981,9 @@ verify_fail() {
 
 # shellcheck disable=SC2329  # called by name through run_ok
 get_verified_tarball() {
+  # Keep the verify directory out of the environment: this function must not
+  # clobber an exported TMPDIR, whose value later build steps rely on (#48).
+  local TMPDIR
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
   # --------------------
@@ -1182,7 +1198,7 @@ get_verified_tarball() {
     return 1
   fi
   mv -f "${TXZFILE}" "${TARGET}"
-  rm -rf ${TMPDIR}
+  rm -rf "${TMPDIR}"
   echo
   log_success "Successfully downloaded and verified ${TARGET}"
 }
@@ -1503,7 +1519,7 @@ install_kernel() {
 }
 
 # Start Script
-chk_permissions
+# (the root check, chk_permissions, ran during argument parsing)
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
   if [ "$VER_SELECTED" != "1" ]; then

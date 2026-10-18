@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run tests
         run: |
-          # Every tests/test_*.sh runs unprivileged and exits non-zero on failure
+          # Every tests/test_*.sh starts unprivileged and exits non-zero on
+          # failure; tests that need root skip when sudo is unavailable
           fail=0
           for t in tests/test_*.sh; do
             echo "::group::$t"
