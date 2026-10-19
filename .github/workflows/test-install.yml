@@ -434,8 +434,11 @@ jobs:
             exit 1
           fi
           # The release that was built must be the one that was downloaded and
-          # PGP-verified, not something the packaging layer rewrote.
-          grep -q "Downloaded and verified .*linux-${ver}\.tar\.xz" /var/log/kernel_installer.log
+          # PGP-verified, not something the packaging layer rewrote. kernel.org
+          # drops the trailing .0 from point-zero stable tarballs (release 7.3.0
+          # ships as linux-7.3.tar.xz), so match that name.
+          tarball_ver="${ver%.0}"
+          grep -q "Downloaded and verified .*linux-${tarball_ver}\.tar\.xz" /var/log/kernel_installer.log
           if command -v dnf >/dev/null 2>&1; then
             rpm -qa 'kernel*' | grep "${ver}" || true
             ls -la /boot/ || true
