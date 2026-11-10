@@ -1,0 +1,35 @@
+name: Release assets
+
+# Publish the files --update needs: the script itself and a SHA256SUMS file
+# that --update verifies before replacing the running script (#66).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to (re)upload kernel_installer.sh and SHA256SUMS to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  assets:
+    name: Attach script and checksums
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - name: Create SHA256SUMS
+        run: sha256sum kernel_installer.sh > SHA256SUMS
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" kernel_installer.sh SHA256SUMS --clobber
+
+      # For an existing release without assets (v1.3.0), dispatch this
+      # workflow with its tag after this file is on main.

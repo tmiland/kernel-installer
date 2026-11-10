@@ -710,23 +710,68 @@ get_updater_version () {
   echo $(sed -n '14 s/[^0-9.]*\([0-9.]*\).*/\1/p' "$1")
 }
 
+# Pick a release asset download URL by an extended-regex match; empty if the
+# release has no matching asset (#66).
+release_asset_url() {
+  printf '%s\n' "$1" |
+    grep '"browser_download_url":' |
+    grep -E -- "$2" |
+    sed -n 's#.*\(https*://[^"]*\).*#\1#;p' |
+    head -n 1
+}
+
+# Print the sha256 recorded for a file name in a SHA256SUMS file.
+checksum_for_asset() {
+  awk -v file="$2" '($2 == file || $2 == ("*" file)) { print $1; exit }' <<<"$1"
+}
+
+# Compare a file's sha256 with an expected 64-hex digest.
+verify_sha256() {
+  local actual
+  [[ $2 =~ ^[0-9a-f]{64}$ ]] || return 1
+  actual=$(sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1) || return 1
+  [ -n "$actual" ] && [ "$actual" = "$2" ]
+}
+
 # Update script
 # Default: Do not check for update
 update_updater () {
-  # Download a file, printing the temp path (empty on failure)
+  # --update replaces the running script file; a piped run has none (#72).
+  if [ -z "$self" ] || [ -z "$SCRIPT_FILENAME" ] || [ -z "$SCRIPT_DIR" ] || [ ! -f "$self" ]; then
+    log_error "Cannot update: --update needs the script to be a file, not a piped run. Download it first."
+    return 1
+  fi
+  # Download a file, printing the temp path (empty on failure). The optional
+  # second argument is a mktemp template; the new script is created next to
+  # the old one so the final mv is a rename, not a cross-filesystem copy (#72).
   download_file () {
-    local url=$1 tf
-    tf=$(mktemp)
-    if command -v curl >/dev/null 2>&1; then
-      curl -sSLf -o "$tf" "${url}" && echo "$tf" || echo ''
-    elif command -v wget >/dev/null 2>&1; then
-      wget -qO "$tf" "${url}" && echo "$tf" || echo ''
+    local url=$1 template=${2:-} tf
+    if [ -n "$template" ]; then
+      tf=$(mktemp "$template") || { echo ''; return 0; }
     else
+      tf=$(mktemp) || { echo ''; return 0; }
+    fi
+    if command -v curl >/dev/null 2>&1; then
+      if curl -sSLf -o "$tf" "${url}"; then
+        echo "$tf"
+      else
+        rm -f "$tf"
+        echo ''
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -qO "$tf" "${url}"; then
+        echo "$tf"
+      else
+        rm -f "$tf"
+        echo ''
+      fi
+    else
+      rm -f "$tf"
       echo ''
     fi
   }
   # Fetch the latest release info once, then parse the fields we need
-  local release_json release_file
+  local release_json release_file tmpfile='' current_version checksums_file expected
   release_file=$(download_file "https://api.github.com/repos/${REPO_NAME}/releases/latest")
   if [ -n "$release_file" ]; then
     release_json=$(cat "$release_file")
@@ -745,10 +790,10 @@ update_updater () {
     grep '"tag_name":' |
     sed -n 's/[^0-9.]*\([0-9.]*\).*/\1/p')
 
-  # Latest release download url
-  LATEST_RELEASE=$(printf '%s\n' "$release_json" |
-    grep '"browser_download_url":' |
-    sed -n 's#.*\(https*://[^"]*\).*#\1#;p')
+  # Only the script asset and its checksum: the first asset is not necessarily
+  # the script (a checksum file can be listed first).
+  LATEST_RELEASE=$(release_asset_url "$release_json" '\.sh"')
+  CHECKSUMS_URL=$(release_asset_url "$release_json" '(SHA256SUMS|sha256sums)"')
 
   # Latest release notes
   RELEASE_NOTE=$(printf '%s\n' "$release_json" |
@@ -761,30 +806,50 @@ update_updater () {
     sed -n 's/.*"\([^"]*\)".*/\1/;p')
 
   echo -e "${GREEN}${ARROW} Checking for updates...${NORMAL}"
-  local tmpfile current_version
-  tmpfile=$(download_file "$LATEST_RELEASE")
   current_version=$(get_updater_version "$self")
 
   # Only proceed when RELEASE_TAG is a strictly newer version
   if [ -n "$RELEASE_TAG" ] && [ "$current_version" != "$RELEASE_TAG" ] &&
     [ "$(printf '%s\n%s\n' "$current_version" "$RELEASE_TAG" | sort -V | tail -n1)" = "$RELEASE_TAG" ]; then
-    if [ $UPDATE_SCRIPT = "1" ]; then
+    if [ "$UPDATE_SCRIPT" = "1" ]; then
       show_update_banner
       echo -e "${RED}${ARROW} Do you want to update [Y/N?]${NORMAL}"
       ask REPLY -n 1
       echo -e "\n\n"
       if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ -z "$LATEST_RELEASE" ]; then
+          log_error "The latest release has no kernel_installer.sh asset. Aborting update."
+          return 1
+        fi
+        if [ -z "$CHECKSUMS_URL" ]; then
+          log_error "The latest release has no SHA256SUMS asset; refusing an unverified update."
+          return 1
+        fi
+        tmpfile=$(download_file "$LATEST_RELEASE" "${SCRIPT_DIR}/.${SCRIPT_FILENAME}.XXXXXX")
         if [ -z "$tmpfile" ]; then
           log_error "Failed to download the new version. Aborting update."
           return 1
         fi
-        if ! mv "$tmpfile" "${SCRIPT_DIR}/${SCRIPT_FILENAME}"; then
+        checksums_file=$(download_file "$CHECKSUMS_URL")
+        if [ -z "$checksums_file" ]; then
+          log_error "Failed to download SHA256SUMS. Aborting update."
+          rm -f "$tmpfile"
+          return 1
+        fi
+        expected=$(checksum_for_asset "$(cat "$checksums_file")" "$SCRIPT_FILENAME")
+        rm -f "$checksums_file"
+        if [ -z "$expected" ] || ! verify_sha256 "$tmpfile" "$expected"; then
+          log_error "Checksum verification failed; refusing to replace the script."
+          rm -f "$tmpfile"
+          return 1
+        fi
+        chmod 0755 "$tmpfile"
+        if ! mv -f -- "$tmpfile" "${SCRIPT_DIR}/${SCRIPT_FILENAME}"; then
           log_error "Failed to install the new version. Aborting update."
           rm -f "$tmpfile"
           return 1
         fi
-        chmod u+x "${SCRIPT_DIR}/${SCRIPT_FILENAME}"
-        echo -e "${GREEN}${DONE} Updated to version ${RELEASE_TAG}, restarting...${NORMAL}"
+        echo -e "${GREEN}${DONE} Updated to version ${RELEASE_TAG} (checksum verified), restarting...${NORMAL}"
 
         # Re-exec the updated script, preserving the parsed options
         local -a reexec_args=()
@@ -815,11 +880,9 @@ update_updater () {
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
       fi
-      rm -f "$tmpfile"
-      return 1 # Update available, but not applied
     fi
+    return 1 # Update available, but not applied
   else
-    rm -f "$tmpfile"
     echo -e "${GREEN}${DONE} No update available.${NORMAL}"
     return 0 # No update available
   fi

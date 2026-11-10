@@ -100,6 +100,8 @@ curl -s https://api.github.com/repos/tmiland/kernel-installer/releases/latest \
 | wget -qi -
 ```
 
+The release provides `kernel_installer.sh` and `SHA256SUMS`; `--update` verifies the download against the checksum before replacing the script.
+
 For main branch
 ```bash
 wget https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh
@@ -137,7 +139,7 @@ Usage:  kernel_installer.sh [options]
 --list-installed       |-li  list installed kernels
 --default-compression  |-dc  select default compression algorithm
 --changelog            |-cl  view changelog for kernel version
---update               |-upd check for script update
+--update               |-upd check for a verified script update
 --uninstall            |-u   uninstall kernel (use with -k option)
 ```
 
