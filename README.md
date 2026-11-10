@@ -220,7 +220,7 @@ the Linus Torvalds / Greg Kroah-Hartman signatures, fetched via WKD.
  - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
  - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
  - Installs `gnupg` if `gpg`/`gpgv` are not available
- - Keys are kept in `$GNUPGHOME` (default `~/.gnupg`); run with `GNUPGHOME=` (empty) to use a throwaway keyring instead
+ - A throwaway keyring is used by default; set `GNUPGHOME=/path` to reuse one. Keys are selected by exact address and exported by fingerprint (a user ID that merely contains the address is not trusted)
  - Mainline snapshots from git.kernel.org are not signed and are not verified
 
 To skip verification:

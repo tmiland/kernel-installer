@@ -1219,6 +1219,20 @@ esac
 # get_verified_tarball runs under run_ok, whose output goes to the log, so it
 # must return instead of exiting: an exit there ended the whole run with
 # nothing on screen (#50). The caller shows VERIFY_ERROR.
+# Print the primary fingerprints of keys whose user ID is exactly <email> in
+# the given keyring. gpg --export matches user IDs by substring, so a bare
+# address must never decide which keys are trusted (#68).
+key_fingerprints() {
+  local gpgbin=$1 keyring=$2 email=$3
+  "${gpgbin}" --batch --no-default-keyring --keyring "${keyring}" \
+    --with-colons --list-keys "<${email}>" 2>/dev/null |
+    awk -F: '
+      $1 == "pub" { want = 1; next }
+      $1 == "sub" { want = 0 }
+      want && $1 == "fpr" { print $10; want = 0 }
+    '
+}
+
 # shellcheck disable=SC2329  # only called from get_verified_tarball (see there)
 verify_fail() {
   VERIFY_ERROR=$1
@@ -1249,12 +1263,10 @@ get_verified_tarball() {
   # Where to download the tarball and verification data.
   TARGETDIR="$INSTALL_DIR"
 
-  # If you set this to empty value (e.g. GNUPGHOME= ./kernel_installer.sh),
-  # we'll make a temporary directory and fetch the verification keys from the
-  # Web Key Directory each time. Also, see the USEKEYRING=
-  # configuration option for an alternative that doesn't
-  # rely on WKD.
-  GNUPGHOME=${GNUPGHOME-"$HOME/.gnupg"}
+  # A throwaway keyring is the default: root's own ~/.gnupg may contain keys
+  # that were imported from anywhere. Set GNUPGHOME to reuse a keyring, and
+  # see the USEKEYRING configuration option for CI keyrings.
+  GNUPGHOME=${GNUPGHOME-}
 
   # For CI and other automated infrastructure, you may want to
   # create a keyring containing the keys belonging to:
@@ -1375,15 +1387,25 @@ get_verified_tarball() {
   # Now we make two keyrings -- one for the autosigner, and
   # the other for kernel developers. We do this in order to
   # make sure that we never verify kernel tarballs using the
-  # autosigner keys, only using developer keys.
+  # autosigner keys, only using developer keys. Select exact addresses and
+  # export by fingerprint: gpg --export a@b also matches *a@b* (#68).
   SHAKEYRING=${TMPDIR}/shakeyring.gpg
-  ${GPGBIN} --batch \
-    --no-default-keyring --keyring ${USEKEYRING} \
-    --export ${SHAKEYS} > ${SHAKEYRING}
   DEVKEYRING=${TMPDIR}/devkeyring.gpg
+  mapfile -t SHA_FPRS < <(key_fingerprints "${GPGBIN}" "${USEKEYRING}" autosigner@kernel.org)
+  mapfile -t DEV_FPRS < <(
+    key_fingerprints "${GPGBIN}" "${USEKEYRING}" torvalds@kernel.org
+    key_fingerprints "${GPGBIN}" "${USEKEYRING}" gregkh@kernel.org
+  )
+  if [ ${#SHA_FPRS[@]} -eq 0 ] || [ ${#DEV_FPRS[@]} -eq 0 ]; then
+    verify_fail "Could not find the expected kernel.org signing keys (exact addresses) in the keyring"
+    return 1
+  fi
   ${GPGBIN} --batch \
-    --no-default-keyring --keyring ${USEKEYRING} \
-    --export ${DEVKEYS} > ${DEVKEYRING}
+    --no-default-keyring --keyring "${USEKEYRING}" \
+    --export "${SHA_FPRS[@]}" > "${SHAKEYRING}"
+  ${GPGBIN} --batch \
+    --no-default-keyring --keyring "${USEKEYRING}" \
+    --export "${DEV_FPRS[@]}" > "${DEVKEYRING}"
 
   # Now that we know we can verify them, grab the contents
   TXZ="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${LINUX_VER}.tar.xz"

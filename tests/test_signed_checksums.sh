@@ -64,7 +64,16 @@ printf '[GNUPG:] VALIDSIG 0000000000000000 2026-01-01\n'
 if [ -n "$out" ]; then cat "$SIGNED_CONTENT" > "$out"; fi
 exit 0
 EOF
-printf '#!/bin/sh\nexit 0\n' > "$work/bin/gpg" # key import/export is not under test
+cat > "$work/bin/gpg" <<'EOF'
+#!/bin/sh
+# Fingerprint selection is exercised by test_gpg_key_selection.sh; here the
+# fake only needs to return one primary fingerprint for each exact address.
+case " $* " in
+  *" --list-keys "*) printf 'pub:u:1:1:0:0:0:0:0:0:0:::::\nfpr:::::::::0000000000000000000000000000000000000000:\n' ;;
+  *) : ;;
+esac
+exit 0
+EOF
 # Fake xz so the signature pipeline has a sane producer (its output is ignored).
 cat > "$work/bin/xz" <<'EOF'
 #!/bin/sh
@@ -74,9 +83,9 @@ EOF
 chmod +x "$work/bin/curl" "$work/bin/gpg" "$work/bin/gpgv" "$work/bin/xz"
 
 # Point the function's hard-coded helpers at the fakes.
-funcs=$(sed -n -e '/^verify_fail() {/,/^}/p' -e '/^get_verified_tarball() {/,/^}/p' "$SCRIPT" |
+funcs=$(sed -n -e '/^key_fingerprints() {/,/^}/p' -e '/^verify_fail() {/,/^}/p' -e '/^get_verified_tarball() {/,/^}/p' "$SCRIPT" |
   sed "s|/usr/bin/curl|$work/bin/curl|g; s|/usr/bin/xz|$work/bin/xz|g")
-for name in verify_fail get_verified_tarball; do
+for name in key_fingerprints verify_fail get_verified_tarball; do
   grep -q "^${name}() {" <<<"$funcs" || { echo "FAIL: ${name}() not found"; exit 1; }
 done
 
