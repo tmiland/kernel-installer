@@ -80,7 +80,11 @@ cat > "$work/bin/xz" <<'EOF'
 for last; do :; done
 cat "$last"
 EOF
-chmod +x "$work/bin/curl" "$work/bin/gpg" "$work/bin/gpgv" "$work/bin/xz"
+# get_verified_tarball prefers gpg2/gpgv2. CI images have real ones, so point
+# those names at the fakes too instead of falling through to the host tools.
+cp "$work/bin/gpg" "$work/bin/gpg2"
+cp "$work/bin/gpgv" "$work/bin/gpgv2"
+chmod +x "$work/bin/curl" "$work/bin/gpg" "$work/bin/gpgv" "$work/bin/xz" "$work/bin/gpg2" "$work/bin/gpgv2"
 
 # Point the function's hard-coded helpers at the fakes.
 funcs=$(sed -n -e '/^key_fingerprints() {/,/^}/p' -e '/^verify_fail() {/,/^}/p' -e '/^get_verified_tarball() {/,/^}/p' "$SCRIPT" |

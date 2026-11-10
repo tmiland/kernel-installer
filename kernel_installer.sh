@@ -1445,7 +1445,7 @@ get_verified_tarball() {
     fi
     # Make a temporary keyring and set USEKEYRING to it
     USEKEYRING=${TMPDIR}/keyring.gpg
-    ${GPGBIN} --batch --export ${DEVKEYS} ${SHAKEYS} > ${USEKEYRING}
+    ${GPGBIN} --batch --homedir "${GNUPGHOME}" --export ${DEVKEYS} ${SHAKEYS} > ${USEKEYRING}
   fi
   # Now we make two keyrings -- one for the autosigner, and
   # the other for kernel developers. We do this in order to

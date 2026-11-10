@@ -149,8 +149,8 @@ jobs:
       - name: Show installer log on failure
         if: failure()
         run: |
-          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
-          tail -n 150 /var/log/kernel_installer.log || true
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel-installer/kernel_installer.log || true
       - name: Verify installation
         run: |
           set -ux
@@ -185,7 +185,7 @@ jobs:
             # resolved at argument parsing, before the build changes directory.
             # The success path removes $INSTALL_DIR, so verify via the install
             # log: the archive was downloaded under the invocation directory.
-            grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel_installer.log
+            grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
       - name: Uninstall kernel ${{ env.KERNEL_VERSION }}
@@ -194,11 +194,11 @@ jobs:
           ver="${KERNEL_VERSION}"
           # --uninstall appends to the install log (only an install starts a
           # new one), so show just the lines it adds
-          log_lines=$(wc -l < /var/log/kernel_installer.log)
+          log_lines=$(wc -l < /var/log/kernel-installer/kernel_installer.log)
           rc=0
           # yes answers apt's purge confirmation (dnf runs with -y)
           yes | ./kernel_installer.sh --uninstall -k "${ver}" || rc=$?
-          tail -n +"$((log_lines + 1))" /var/log/kernel_installer.log || true
+          tail -n +"$((log_lines + 1))" /var/log/kernel-installer/kernel_installer.log || true
           test "$rc" -eq 0
           if command -v dnf >/dev/null 2>&1; then
             pkgs="kernel-${ver} kernel-devel-${ver}"
@@ -219,7 +219,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-${{ matrix.slug }}
-          path: /var/log/kernel_installer.log
+          path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore
 
   mainline:
@@ -261,8 +261,8 @@ jobs:
       - name: Show installer log on failure
         if: failure()
         run: |
-          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
-          tail -n 150 /var/log/kernel_installer.log || true
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel-installer/kernel_installer.log || true
       - name: Verify installation
         run: |
           set -ux
@@ -295,7 +295,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-mainline-${{ matrix.slug }}
-          path: /var/log/kernel_installer.log
+          path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore
 
   custom-config-smoke:
@@ -336,8 +336,8 @@ jobs:
       - name: Show installer log on failure
         if: failure()
         run: |
-          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
-          tail -n 150 /var/log/kernel_installer.log || true
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel-installer/kernel_installer.log || true
       - name: Verify custom config applied
         run: |
           set -eux
@@ -352,7 +352,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-custom-config-smoke
-          path: /var/log/kernel_installer.log
+          path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore
 
   # Issue #43: every other job here passes -k, --mainline or --custom-config,
@@ -411,8 +411,8 @@ jobs:
       - name: Show installer log on failure
         if: failure()
         run: |
-          echo "=== /var/log/kernel_installer.log (last 150 lines) ==="
-          tail -n 150 /var/log/kernel_installer.log || true
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 150 lines) ==="
+          tail -n 150 /var/log/kernel-installer/kernel_installer.log || true
       - name: Verify installation
         run: |
           set -ux
@@ -438,7 +438,7 @@ jobs:
           # drops the trailing .0 from point-zero stable tarballs (release 7.3.0
           # ships as linux-7.3.tar.xz), so match that name.
           tarball_ver="${ver%.0}"
-          grep -q "Downloaded and verified .*linux-${tarball_ver}\.tar\.xz" /var/log/kernel_installer.log
+          grep -q "Downloaded and verified .*linux-${tarball_ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
           if command -v dnf >/dev/null 2>&1; then
             rpm -qa 'kernel*' | grep "${ver}" || true
             ls -la /boot/ || true
@@ -467,5 +467,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-latest-${{ matrix.slug }}
-          path: /var/log/kernel_installer.log
+          path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore

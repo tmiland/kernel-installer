@@ -49,6 +49,7 @@ check "the longer address still selects its own key" grep -qx "$substring" <<<"$
 # exact fingerprints rather than bare addresses.
 check "GNUPGHOME defaults to empty (throwaway keyring)" grep -qF 'GNUPGHOME=${GNUPGHOME-}' "$SCRIPT"
 check "get_verified_tarball selects fingerprints" grep -qF 'key_fingerprints "${GPGBIN}"' "$SCRIPT"
+check "the temporary keyring is exported from GNUPGHOME" grep -qF -- '--homedir "${GNUPGHOME}" --export' "$SCRIPT"
 check "SHA keyring is exported by fingerprint" grep -q -- '--export "\${SHA_FPRS\[@\]}"' "$SCRIPT"
 check "DEV keyring is exported by fingerprint" grep -q -- '--export "\${DEV_FPRS\[@\]}"' "$SCRIPT"
 
