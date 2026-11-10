@@ -57,10 +57,22 @@ if [[ -n ${BASH_SOURCE[0]} ]]; then
 fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
+# Bundled kernel.org signing keys (public) and their pinned primary
+# fingerprints. Checkout runs import the bundle; piped runs fall back to WKD.
+KERNEL_KEYRING_FILE=src/keys/kernel.org.asc
+TORVALDS_FPR=ABAF11C65A2970B130ABE3C479BE3E4300411886
+GREGKH_FPR=647F28654894E3BD457199BE38DBBDC86092693E
+AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
-LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
+# /var/log itself is group-writable on Ubuntu/Mint; the log lives in a
+# root-only subdirectory instead of next to entries the syslog group can
+# replace (#64).
+DEFAULT_LOGFILE=/var/log/kernel-installer/kernel_installer.log
+LOGFILE=${LOGFILE:-$DEFAULT_LOGFILE}
+# One installer at a time: two runs would share the build folder and log (#70)
+LOCK_FILE=${LOCK_FILE:-/run/kernel_installer.lock}
 # Default processing units (all available)
 NPROC=${NPROC:-$(nproc)}
 # Console output level; ignore debug level messages.
@@ -189,7 +201,7 @@ fatal() {
   printf "%s \\n" "${RED}Cannot continue installation.${NORMAL}"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
-    rm -rf "$INSTALL_DIR"
+    remove_install_dir "$INSTALL_DIR" || log_warning "Could not completely remove $INSTALL_DIR."
   elif [ -d "$INSTALL_DIR" ]; then
     log_warning "Not removing $INSTALL_DIR: it may contain files not created by this installer."
   fi
@@ -271,11 +283,78 @@ report_build_failure() {
   log_error "The build tree is kept in ${INSTALL_DIR} for inspection (it is removed on the next run)."
 }
 
+# Refuse to start while another run holds the lock. This deliberately does not
+# go through fatal(): fatal removes INSTALL_DIR, which would delete the build
+# tree of the run that currently holds the lock.
+take_lock() {
+  if ! command -v flock >/dev/null 2>&1; then
+    printf 'Cannot start: flock (util-linux) is not installed.\n' >&2
+    exit 1
+  fi
+  if [ ! -d "$(dirname -- "$LOCK_FILE")" ]; then
+    LOCK_FILE=/var/lock/kernel_installer.lock
+  fi
+  if ! exec 9>>"$LOCK_FILE"; then
+    printf 'Cannot open lock file %s.\n' "$LOCK_FILE" >&2
+    exit 1
+  fi
+  if ! flock -n 9; then
+    printf 'Another kernel_installer run is already in progress (lock: %s).\n' "$LOCK_FILE" >&2
+    exit 1
+  fi
+}
+
+# Validate the log path before root appends to it or renames it to .1. The
+# default lives in a 0700 root-owned directory; a custom LOGFILE must not be a
+# symlink, must not be a file owned by someone else, and must not sit in a
+# directory other users can write to (#64).
+chk_logfile() {
+  local log=${1:-$LOGFILE} dir mode
+  dir=$(dirname -- "$log")
+  if [ -L "$log" ]; then
+    fatal "Log file $log is a symlink; refusing to write through it."
+  fi
+  if [ -e "$log" ] && { [ ! -f "$log" ] || [ ! -O "$log" ]; }; then
+    fatal "Log file $log is not a regular file owned by the current user; refusing to use it."
+  fi
+  if [ -L "$log.1" ]; then
+    fatal "Previous log $log.1 is a symlink; refusing to rotate onto it."
+  fi
+  if [ -e "$log.1" ] && { [ ! -f "$log.1" ] || [ ! -O "$log.1" ]; }; then
+    fatal "Previous log $log.1 is not a regular file owned by the current user; refusing to replace it."
+  fi
+  if [ ! -d "$dir" ]; then
+    if [[ $log == "$DEFAULT_LOGFILE" ]]; then
+      if ! mkdir -p -m 0700 -- "$dir"; then
+        fatal "Could not create log directory $dir."
+      fi
+    else
+      fatal "Log directory $dir does not exist."
+    fi
+  fi
+  if [ -L "$dir" ]; then
+    fatal "Log directory $dir is a symlink; refusing to use it."
+  fi
+  mode=$(stat -c '%a' -- "$dir" 2>/dev/null) ||
+    fatal "Could not read the permissions of log directory $dir."
+  if (( (8#$mode & 0022) != 0 )); then
+    fatal "Log directory $dir is writable by group or others; use $DEFAULT_LOGFILE or a directory only root can write to."
+  fi
+  if [[ $log == "$DEFAULT_LOGFILE" ]]; then
+    if [ ! -O "$dir" ]; then
+      fatal "Log directory $dir is not owned by the current user."
+    fi
+    if (( (8#$mode & 0077) != 0 )); then
+      fatal "Log directory $dir must not be accessible by group or others; run: chmod 700 $dir"
+    fi
+  fi
+}
+
 # Start an install with an empty log and keep the previous one as
 # $LOGFILE.1, so a failed build's log survives the next run (#53).
 rotate_log() {
   if [ -f "$LOGFILE" ]; then
-    mv -f "$LOGFILE" "$LOGFILE.1"
+    mv -f -- "$LOGFILE" "$LOGFILE.1"
   fi
 }
 
@@ -286,6 +365,9 @@ is_safe_install_dir() {
   if [ -z "$dir" ] || [ "$dir" = "/" ] || [ ! -d "$dir" ]; then
     return 1
   fi
+  if [ -L "$dir" ]; then
+    return 1
+  fi
   if [ -e "$dir/$INSTALL_DIR_MARKER" ]; then
     return 0
   fi
@@ -293,6 +375,73 @@ is_safe_install_dir() {
     return 0
   fi
   return 1
+}
+
+# Delete a build directory this installer owns, removing the marker last so an
+# interrupted delete leaves a folder the next run can still recognise (#69).
+remove_install_dir() {
+  local dir=$1
+  if [ -z "$dir" ] || [ "$dir" = "/" ] || [ ! -d "$dir" ]; then
+    return 1
+  fi
+  if ! find "$dir" -mindepth 1 ! -name "$INSTALL_DIR_MARKER" -delete; then
+    return 1
+  fi
+  rm -f -- "$dir/$INSTALL_DIR_MARKER" || return 1
+  rmdir -- "$dir" 2>/dev/null || true
+  return 0
+}
+
+# Create a fresh build directory for this run. Refuse symlinks, folders owned
+# by another user, and shared parents another user can replace entries in: the
+# tree is built as root, so a nested attacker-controlled folder would let them
+# swap the tarball or source between verification and the build (#62).
+prepare_install_dir() {
+  local dir=$INSTALL_DIR parent parent_uid caller_uid mode
+  parent=$(dirname -- "$dir")
+  if [ ! -d "$parent" ]; then
+    if ! mkdir -p -- "$parent"; then
+      fatal "Could not create install directory parent $parent"
+    fi
+  fi
+  if [ -L "$parent" ]; then
+    fatal "Install directory parent $parent is a symlink; refusing to use it."
+  fi
+  mode=$(stat -c '%a' -- "$parent" 2>/dev/null) ||
+    fatal "Could not read the permissions of $parent."
+  # A non-sticky group/other-writable parent lets another user rename or
+  # replace the build folder; sticky shared folders (/tmp, /var/tmp) do not.
+  if (( (8#$mode & 0022) != 0 && (8#$mode & 01000) == 0 )); then
+    fatal "Install directory parent $parent is writable by group or others and is not sticky; choose a directory only you (and root) can write to."
+  fi
+  parent_uid=$(stat -c '%u' -- "$parent" 2>/dev/null) ||
+    fatal "Could not read the owner of $parent."
+  caller_uid=${SUDO_UID:-$(id -u)}
+  if [ "$parent_uid" != "0" ] && [ "$parent_uid" != "$caller_uid" ]; then
+    fatal "Install directory parent $parent is owned by another user; choose a directory you own."
+  fi
+  if [ -e "$dir" ] || [ -L "$dir" ]; then
+    if ! is_safe_install_dir "$dir"; then
+      fatal "Install directory $dir is not empty and does not look like it was created by this script. Refusing to delete its contents; use an empty directory or clean it up yourself."
+    fi
+    if ! remove_install_dir "$dir"; then
+      fatal "Could not remove the previous build directory $dir."
+    fi
+  fi
+  if ! mkdir -m 0755 -- "$dir"; then
+    fatal "Could not create install directory $dir"
+  fi
+  if [ -L "$dir" ] || [ ! -O "$dir" ]; then
+    fatal "Install directory $dir is not owned by the current user; refusing to build in it."
+  fi
+  mode=$(stat -c '%a' -- "$dir" 2>/dev/null) ||
+    fatal "Could not read the permissions of $dir."
+  if (( (8#$mode & 0022) != 0 )); then
+    fatal "Install directory $dir is writable by group or others; refusing to build in it."
+  fi
+  if ! touch -- "$dir/$INSTALL_DIR_MARKER"; then
+    fatal "Could not create the marker file in $dir"
+  fi
 }
 
 read_sleep() {
@@ -432,9 +581,17 @@ chk_kernel() {
   fi
 }
 
+# A kernel version is digits.digits plus an optional release suffix such as
+# -rc7, -38-generic or -300.fc44.x86_64. Only these characters are used: the
+# version is pasted into run_ok commands (which eval), so shell metacharacters,
+# spaces and path separators must never get through (#63).
+valid_kernel_version() {
+  [[ $1 =~ ^[0-9]+\.[0-9]+[0-9A-Za-z.+~_-]*$ ]]
+}
+
 # Make sure a valid kernel version was determined before doing anything destructive
 chk_version() {
-  if [[ ! $LINUX_VER =~ ^[0-9]+\.[0-9]+ ]]; then
+  if ! valid_kernel_version "$LINUX_VER"; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Could not determine a valid kernel version (got: '${YELLOW}${LINUX_VER}${NORMAL}'). Check your network connection or specify a version with ${CYAN}--kernel${NORMAL}."
   fi
 }
@@ -559,23 +716,68 @@ get_updater_version () {
   echo $(sed -n '14 s/[^0-9.]*\([0-9.]*\).*/\1/p' "$1")
 }
 
+# Pick a release asset download URL by an extended-regex match; empty if the
+# release has no matching asset (#66).
+release_asset_url() {
+  printf '%s\n' "$1" |
+    grep '"browser_download_url":' |
+    grep -E -- "$2" |
+    sed -n 's#.*\(https*://[^"]*\).*#\1#;p' |
+    head -n 1
+}
+
+# Print the sha256 recorded for a file name in a SHA256SUMS file.
+checksum_for_asset() {
+  awk -v file="$2" '($2 == file || $2 == ("*" file)) { print $1; exit }' <<<"$1"
+}
+
+# Compare a file's sha256 with an expected 64-hex digest.
+verify_sha256() {
+  local actual
+  [[ $2 =~ ^[0-9a-f]{64}$ ]] || return 1
+  actual=$(sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1) || return 1
+  [ -n "$actual" ] && [ "$actual" = "$2" ]
+}
+
 # Update script
 # Default: Do not check for update
 update_updater () {
-  # Download a file, printing the temp path (empty on failure)
+  # --update replaces the running script file; a piped run has none (#72).
+  if [ -z "$self" ] || [ -z "$SCRIPT_FILENAME" ] || [ -z "$SCRIPT_DIR" ] || [ ! -f "$self" ]; then
+    log_error "Cannot update: --update needs the script to be a file, not a piped run. Download it first."
+    return 1
+  fi
+  # Download a file, printing the temp path (empty on failure). The optional
+  # second argument is a mktemp template; the new script is created next to
+  # the old one so the final mv is a rename, not a cross-filesystem copy (#72).
   download_file () {
-    local url=$1 tf
-    tf=$(mktemp)
-    if command -v curl >/dev/null 2>&1; then
-      curl -sSLf -o "$tf" "${url}" && echo "$tf" || echo ''
-    elif command -v wget >/dev/null 2>&1; then
-      wget -qO "$tf" "${url}" && echo "$tf" || echo ''
+    local url=$1 template=${2:-} tf
+    if [ -n "$template" ]; then
+      tf=$(mktemp "$template") || { echo ''; return 0; }
     else
+      tf=$(mktemp) || { echo ''; return 0; }
+    fi
+    if command -v curl >/dev/null 2>&1; then
+      if curl -sSLf -o "$tf" "${url}"; then
+        echo "$tf"
+      else
+        rm -f "$tf"
+        echo ''
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if wget -qO "$tf" "${url}"; then
+        echo "$tf"
+      else
+        rm -f "$tf"
+        echo ''
+      fi
+    else
+      rm -f "$tf"
       echo ''
     fi
   }
   # Fetch the latest release info once, then parse the fields we need
-  local release_json release_file
+  local release_json release_file tmpfile='' current_version checksums_file expected
   release_file=$(download_file "https://api.github.com/repos/${REPO_NAME}/releases/latest")
   if [ -n "$release_file" ]; then
     release_json=$(cat "$release_file")
@@ -594,10 +796,10 @@ update_updater () {
     grep '"tag_name":' |
     sed -n 's/[^0-9.]*\([0-9.]*\).*/\1/p')
 
-  # Latest release download url
-  LATEST_RELEASE=$(printf '%s\n' "$release_json" |
-    grep '"browser_download_url":' |
-    sed -n 's#.*\(https*://[^"]*\).*#\1#;p')
+  # Only the script asset and its checksum: the first asset is not necessarily
+  # the script (a checksum file can be listed first).
+  LATEST_RELEASE=$(release_asset_url "$release_json" '\.sh"')
+  CHECKSUMS_URL=$(release_asset_url "$release_json" '(SHA256SUMS|sha256sums)"')
 
   # Latest release notes
   RELEASE_NOTE=$(printf '%s\n' "$release_json" |
@@ -610,30 +812,50 @@ update_updater () {
     sed -n 's/.*"\([^"]*\)".*/\1/;p')
 
   echo -e "${GREEN}${ARROW} Checking for updates...${NORMAL}"
-  local tmpfile current_version
-  tmpfile=$(download_file "$LATEST_RELEASE")
   current_version=$(get_updater_version "$self")
 
   # Only proceed when RELEASE_TAG is a strictly newer version
   if [ -n "$RELEASE_TAG" ] && [ "$current_version" != "$RELEASE_TAG" ] &&
     [ "$(printf '%s\n%s\n' "$current_version" "$RELEASE_TAG" | sort -V | tail -n1)" = "$RELEASE_TAG" ]; then
-    if [ $UPDATE_SCRIPT = "1" ]; then
+    if [ "$UPDATE_SCRIPT" = "1" ]; then
       show_update_banner
       echo -e "${RED}${ARROW} Do you want to update [Y/N?]${NORMAL}"
       ask REPLY -n 1
       echo -e "\n\n"
       if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ -z "$LATEST_RELEASE" ]; then
+          log_error "The latest release has no kernel_installer.sh asset. Aborting update."
+          return 1
+        fi
+        if [ -z "$CHECKSUMS_URL" ]; then
+          log_error "The latest release has no SHA256SUMS asset; refusing an unverified update."
+          return 1
+        fi
+        tmpfile=$(download_file "$LATEST_RELEASE" "${SCRIPT_DIR}/.${SCRIPT_FILENAME}.XXXXXX")
         if [ -z "$tmpfile" ]; then
           log_error "Failed to download the new version. Aborting update."
           return 1
         fi
-        if ! mv "$tmpfile" "${SCRIPT_DIR}/${SCRIPT_FILENAME}"; then
+        checksums_file=$(download_file "$CHECKSUMS_URL")
+        if [ -z "$checksums_file" ]; then
+          log_error "Failed to download SHA256SUMS. Aborting update."
+          rm -f "$tmpfile"
+          return 1
+        fi
+        expected=$(checksum_for_asset "$(cat "$checksums_file")" "$SCRIPT_FILENAME")
+        rm -f "$checksums_file"
+        if [ -z "$expected" ] || ! verify_sha256 "$tmpfile" "$expected"; then
+          log_error "Checksum verification failed; refusing to replace the script."
+          rm -f "$tmpfile"
+          return 1
+        fi
+        chmod 0755 "$tmpfile"
+        if ! mv -f -- "$tmpfile" "${SCRIPT_DIR}/${SCRIPT_FILENAME}"; then
           log_error "Failed to install the new version. Aborting update."
           rm -f "$tmpfile"
           return 1
         fi
-        chmod u+x "${SCRIPT_DIR}/${SCRIPT_FILENAME}"
-        echo -e "${GREEN}${DONE} Updated to version ${RELEASE_TAG}, restarting...${NORMAL}"
+        echo -e "${GREEN}${DONE} Updated to version ${RELEASE_TAG} (checksum verified), restarting...${NORMAL}"
 
         # Re-exec the updated script, preserving the parsed options
         local -a reexec_args=()
@@ -664,11 +886,9 @@ update_updater () {
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
       fi
-      rm -f "$tmpfile"
-      return 1 # Update available, but not applied
     fi
+    return 1 # Update available, but not applied
   else
-    rm -f "$tmpfile"
     echo -e "${GREEN}${DONE} No update available.${NORMAL}"
     return 0 # No update available
   fi
@@ -742,7 +962,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --kernel | -k)
       require_arg "$1" "${2:-}"
-      if [[ ! $2 =~ ^[0-9] ]]; then
+      if ! valid_kernel_version "$2"; then
         fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Invalid kernel version: $2"
       fi
       LINUX_VER="$2"
@@ -852,6 +1072,7 @@ esac
 # prompt and its package installation, the dependency checks) assumes root,
 # and a run piped through a one-liner must not get that far as a regular user.
 chk_permissions
+chk_logfile "$LOGFILE"
 
 shopt -s nocasematch
 
@@ -988,7 +1209,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1067,11 +1288,42 @@ esac
 # get_verified_tarball runs under run_ok, whose output goes to the log, so it
 # must return instead of exiting: an exit there ended the whole run with
 # nothing on screen (#50). The caller shows VERIFY_ERROR.
+# Print the primary fingerprints of keys whose user ID is exactly <email> in
+# the given GnuPG homedir. gpg --export/--list-keys match user IDs by
+# substring, and Fedora's gpg ignores --keyring for listing when use-keyboxd
+# is enabled, so select from a homedir instead (#68).
+key_fingerprints() {
+  local gpgbin=$1 homedir=$2 email=$3
+  "${gpgbin}" --batch --homedir "${homedir}" --with-colons --list-keys 2>/dev/null |
+    awk -F: -v want="<${email}>" '
+      $1 == "pub" { inkey = 1; fpr = ""; next }
+      $1 == "sub" { inkey = 0 }
+      inkey && $1 == "fpr" { fpr = $10; next }
+      inkey && $1 == "uid" { if (index($10, want) > 0) { print fpr; inkey = 0 } }
+    '
+}
+
+# Require exactly the pinned primary key for each kernel.org address, so a
+# bundled file or a WKD response cannot substitute a different key.
+check_kernel_key_fingerprints() {
+  local gpgbin=$1 home=$2
+  local -a fprs
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" torvalds@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${TORVALDS_FPR}" ] || return 1
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" gregkh@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${GREGKH_FPR}" ] || return 1
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" autosigner@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${AUTOSIGNER_FPR}" ] || return 1
+}
+
 # shellcheck disable=SC2329  # only called from get_verified_tarball (see there)
 verify_fail() {
   VERIFY_ERROR=$1
   if [ -n "${verify_dir:-}" ]; then
     rm -rf "$verify_dir"
+  fi
+  if [ -n "${gpg_root:-}" ]; then
+    rm -rf "$gpg_root"
   fi
 }
 
@@ -1079,7 +1331,7 @@ verify_fail() {
 get_verified_tarball() {
   # Keep the verify directory out of the environment: this function must not
   # clobber an exported TMPDIR, whose value later build steps rely on (#48).
-  local TMPDIR
+  local TMPDIR keyring_home ok gpg_root=''
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
   # --------------------
@@ -1097,12 +1349,10 @@ get_verified_tarball() {
   # Where to download the tarball and verification data.
   TARGETDIR="$INSTALL_DIR"
 
-  # If you set this to empty value (e.g. GNUPGHOME= ./kernel_installer.sh),
-  # we'll make a temporary directory and fetch the verification keys from the
-  # Web Key Directory each time. Also, see the USEKEYRING=
-  # configuration option for an alternative that doesn't
-  # rely on WKD.
-  GNUPGHOME=${GNUPGHOME-"$HOME/.gnupg"}
+  # A throwaway keyring is the default: root's own ~/.gnupg may contain keys
+  # that were imported from anywhere. Set GNUPGHOME to reuse a keyring, and
+  # see the USEKEYRING configuration option for CI keyrings.
+  GNUPGHOME=${GNUPGHOME-}
 
   # For CI and other automated infrastructure, you may want to
   # create a keyring containing the keys belonging to:
@@ -1166,18 +1416,15 @@ get_verified_tarball() {
   fi
 
   TARGET="${TARGETDIR}/linux-${LINUX_VER}.tar.xz"
-  # Do we already have this file?
-  if [[ -f ${TARGET} ]]; then
-    log_debug "File ${TARGETDIR}/linux-${LINUX_VER}.tar.xz already exists."
-    echo "Skipping download..."
-    return 0
-  fi
+  # Never trust an existing tarball: the build directory is recreated for each
+  # run, so a file here can only come from an interrupted run or from someone
+  # who can write to the directory. Download and verify it again (#62).
 
   # Start by making sure our GnuPG environment is sane
   if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
     echo "Could not find gpg or gpgv, installing gnupg"
     log_debug "Installing gnupg"
-    ${INSTALL} gnupg
+    ${INSTALL} gnupg ca-certificates
     GPGBIN="$(command -v gpg2 || command -v gpg)"
     GPGVBIN="$(command -v gpgv2 || command -v gpgv)"
     if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
@@ -1194,47 +1441,89 @@ get_verified_tarball() {
   fi
   verify_dir=$TMPDIR
   log_debug "Using TMPDIR=${TMPDIR}"
-  # Are we using a keyring?
+  # GnuPG sockets have a ~108-character path limit; the build directory can be
+  # deep (e.g. --dir under a long CI workspace), so keep gpg homes in /tmp.
+  gpg_root=$(mktemp -d "${GPG_TMPDIR:-/tmp}/kernel-installer-gpg.XXXXXXXX") || {
+    verify_fail "Could not create a temporary GnuPG directory"
+    return 1
+  }
+  chmod 700 "${gpg_root}"
+  # Build a private homedir containing exactly the keys to trust. A checkout
+  # has src/keys/kernel.org.asc and uses it (no WKD/dirmngr dependency); piped
+  # runs fall back to WKD. Fedora's gpg enables use-keyboxd, which makes
+  # --keyring on a file ignored for --list-keys, so selection and export both
+  # use a homedir (#68).
   if [[ -z ${USEKEYRING} ]]; then
-    if [[ -z ${GNUPGHOME} ]]; then
-      GNUPGHOME="${TMPDIR}/gnupg"
-      # elif [[ ! -d ${GNUPGHOME} ]]; then
-      #   echo "GNUPGHOME directory ${GNUPGHOME} does not exist"
-      #   echo -n "Create it? [Y/n]"
-      #   read -r YN
-      #   if [[ ${YN} == 'n' ]]; then
-      #     echo "Exiting"
-      #     rm -rf "${TMPDIR}"
-      #     exit 1
-      #   fi
+    if [[ -n ${self:-} && -f "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" ]]; then
+      keyring_home="${gpg_root}/bundled"
+      mkdir -m 0700 "${keyring_home}"
+      if ! ${GPGBIN} --batch --homedir "${keyring_home}" \
+        --import "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" >/dev/null 2>&1; then
+        verify_fail "Could not import the bundled kernel.org signing keys"
+        return 1
+      fi
+      log_debug "Using bundled kernel.org signing keys"
+    else
+      if [[ -z ${GNUPGHOME} ]]; then
+        GNUPGHOME="${gpg_root}/wkd"
+      fi
+      mkdir -p -m 0700 "${GNUPGHOME}"
+      log_debug "Making sure we have all the necessary keys"
+      ok=0
+      # dirmngr occasionally fails to start on the first attempt in a fresh
+      # container (and WKD needs it); retry before giving up.
+      for _ in 1 2 3; do
+        if ${GPGBIN} --batch --quiet \
+          --homedir "${GNUPGHOME}" \
+          --auto-key-locate wkd \
+          --locate-keys ${DEVKEYS} ${SHAKEYS}; then
+          ok=1
+          break
+        fi
+        sleep 1
+      done
+      if [[ $ok != 1 ]]; then
+        verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
+        return 1
+      fi
+      keyring_home=$GNUPGHOME
     fi
-    mkdir -p -m 0700 "${GNUPGHOME}"
-    log_debug "Making sure we have all the necessary keys"
-    ${GPGBIN} --batch --quiet \
-      --homedir "${GNUPGHOME}" \
-      --auto-key-locate wkd \
-      --locate-keys ${DEVKEYS} ${SHAKEYS}
-    # If this returned non-0, we bail
-    if [[ $? != "0" ]]; then
-      verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
+    if ! check_kernel_key_fingerprints "${GPGBIN}" "${keyring_home}"; then
+      verify_fail "The kernel.org signing keys do not match the pinned fingerprints"
       return 1
     fi
-    # Make a temporary keyring and set USEKEYRING to it
-    USEKEYRING=${TMPDIR}/keyring.gpg
-    ${GPGBIN} --batch --export ${DEVKEYS} ${SHAKEYS} > ${USEKEYRING}
+  else
+    keyring_home="${gpg_root}/custom"
+    mkdir -m 0700 "${keyring_home}"
+    if ! ${GPGBIN} --batch --homedir "${keyring_home}" --import "${USEKEYRING}" >/dev/null 2>&1; then
+      verify_fail "Could not import USEKEYRING ${USEKEYRING}"
+      return 1
+    fi
+    if ! check_kernel_key_fingerprints "${GPGBIN}" "${keyring_home}"; then
+      verify_fail "USEKEYRING does not contain the pinned kernel.org signing keys"
+      return 1
+    fi
   fi
   # Now we make two keyrings -- one for the autosigner, and
   # the other for kernel developers. We do this in order to
   # make sure that we never verify kernel tarballs using the
-  # autosigner keys, only using developer keys.
+  # autosigner keys, only using developer keys. Select exact addresses and
+  # export by fingerprint: gpg --export a@b also matches *a@b* (#68).
   SHAKEYRING=${TMPDIR}/shakeyring.gpg
-  ${GPGBIN} --batch \
-    --no-default-keyring --keyring ${USEKEYRING} \
-    --export ${SHAKEYS} > ${SHAKEYRING}
   DEVKEYRING=${TMPDIR}/devkeyring.gpg
-  ${GPGBIN} --batch \
-    --no-default-keyring --keyring ${USEKEYRING} \
-    --export ${DEVKEYS} > ${DEVKEYRING}
+  mapfile -t SHA_FPRS < <(key_fingerprints "${GPGBIN}" "${keyring_home}" autosigner@kernel.org)
+  mapfile -t DEV_FPRS < <(
+    key_fingerprints "${GPGBIN}" "${keyring_home}" torvalds@kernel.org
+    key_fingerprints "${GPGBIN}" "${keyring_home}" gregkh@kernel.org
+  )
+  if [ ${#SHA_FPRS[@]} -eq 0 ] || [ ${#DEV_FPRS[@]} -eq 0 ]; then
+    verify_fail "Could not find the expected kernel.org signing keys (exact addresses) in the keyring"
+    return 1
+  fi
+  ${GPGBIN} --batch --homedir "${keyring_home}" \
+    --export "${SHA_FPRS[@]}" > "${SHAKEYRING}"
+  ${GPGBIN} --batch --homedir "${keyring_home}" \
+    --export "${DEV_FPRS[@]}" > "${DEVKEYRING}"
 
   # Now that we know we can verify them, grab the contents
   TXZ="https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${LINUX_VER}.tar.xz"
@@ -1253,15 +1542,22 @@ get_verified_tarball() {
     return 1
   fi
   log_debug "Verifying the checksums file"
-  COUNT=$(${GPGVBIN} --keyring=${SHAKEYRING} --status-fd=1 ${SHAFILE} \
-    | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
+  SHAFILE_SIGNED=${TMPDIR}/sha256sums.signed
+  STATUSFILE=${TMPDIR}/sha256sums.status
+  if ! ${GPGVBIN} --keyring=${SHAKEYRING} --status-fd=1 \
+    --output "${SHAFILE_SIGNED}" "${SHAFILE}" > "${STATUSFILE}"; then
+    verify_fail "FAILED to verify the sha256sums.asc file."
+    return 1
+  fi
+  COUNT=$(grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)' "${STATUSFILE}")
   if [[ ${COUNT} -lt 2 ]]; then
     verify_fail "FAILED to verify the sha256sums.asc file."
     return 1
   fi
-  # Grab only the tarball we want from the full list
+  # Grab only the tarball we want from gpgv's output, never from text appended
+  # after the signature block in the clearsigned file (#67).
   SHACHECK=${TMPDIR}/sha256sums.txt
-  grep "linux-${LINUX_VER}.tar.xz" ${SHAFILE} > ${SHACHECK}
+  grep "linux-${LINUX_VER}.tar.xz" "${SHAFILE_SIGNED}" > "${SHACHECK}"
 
   echo
   log_debug "Downloading the signature file for linux-${LINUX_VER}"
@@ -1295,6 +1591,7 @@ get_verified_tarball() {
   fi
   mv -f "${TXZFILE}" "${TARGET}"
   rm -rf "${TMPDIR}"
+  rm -rf "${gpg_root}"
   echo
   log_success "Successfully downloaded and verified ${TARGET}"
 }
@@ -1388,20 +1685,9 @@ install_kernel() {
   # Download Linux source code
   log_debug "Phase 2 of 6: Linux source code download"
   printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}6${NORMAL}: Download Linux source code"
-  if [ ! -d "$INSTALL_DIR" ]; then
-    if ! mkdir -p "$INSTALL_DIR" 1>/dev/null 2>&1; then
-      fatal "Could not create install directory $INSTALL_DIR"
-    fi
-  fi
+  log_debug "Deleting old Linux source code files in $INSTALL_DIR"
+  prepare_install_dir
   if [ -d "$INSTALL_DIR" ]; then
-    if ! is_safe_install_dir "$INSTALL_DIR"; then
-      fatal "Install directory $INSTALL_DIR is not empty and does not look like it was created by this script. Refusing to delete its contents; use an empty directory or clean it up yourself."
-    fi
-    #(
-    #cd "$INSTALL_DIR"/linux || exit
-    log_debug "Deleting old Linux source code files in $INSTALL_DIR"
-    rm -rf "$INSTALL_DIR" && mkdir -p "$INSTALL_DIR"
-    touch "$INSTALL_DIR/$INSTALL_DIR_MARKER"
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
     if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
@@ -1583,8 +1869,7 @@ install_kernel() {
       log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
       exit 1
     fi
-    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel headers: ${LINUX_VER}"
-    run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image and headers: ${LINUX_VER}"
   fi
   log_success "Installation finished"
   # else
@@ -1602,8 +1887,8 @@ install_kernel() {
   printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} Cleaning up"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_debug "Cleaning up temporary files in $INSTALL_DIR."
-    find "$INSTALL_DIR" -mindepth 1 -delete
-    rmdir "$INSTALL_DIR" 2>/dev/null || true
+    remove_install_dir "$INSTALL_DIR" ||
+      log_error "Could not completely clean up $INSTALL_DIR."
   else
     log_error "Could not safely clean up temporary files because INSTALL DIR set to $INSTALL_DIR."
   fi
@@ -1623,6 +1908,7 @@ install_kernel() {
 # (the root check, chk_permissions, ran during argument parsing)
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
+  take_lock
   if [ "$VER_SELECTED" != "1" ]; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} No kernel version selected for uninstall. Use ${CYAN}--kernel${NORMAL} to select one."
   fi
@@ -1688,6 +1974,7 @@ fi
 # Install Kernel
 # Only an install starts a new log; --list-installed and --uninstall above
 # leave the last one in place
+take_lock
 rotate_log
 chk_version
 chk_kernel
@@ -1709,7 +1996,8 @@ else
   printf "%s" "${errorlist}"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
-    rm -rf "$INSTALL_DIR"
+    remove_install_dir "$INSTALL_DIR" ||
+      log_warning "Could not completely remove $INSTALL_DIR."
   fi
 fi
 

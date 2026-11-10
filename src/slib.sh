@@ -216,7 +216,7 @@ log_debug()     { log "$1" "DEBUG" "${LOG_DEBUG_COLOR}"; }
 # Config variables, set these after sourcing to change behavior.
 SPINNER_COLORNUM=2 # What color? Irrelevent if COLORCYCLE=1.
 SPINNER_COLORCYCLE=1 # Does the color cycle?
-SPINNER_DONEFILE="stopspinning" # Path/name of file to exit on.
+SPINNER_DONEFILE="" # set by run_ok to a file in its private temporary directory
 SPINNER_SYMBOLS="ASCII_PROPELLER" # Name of the variable containing the symbols.
 SPINNER_CLEAR=1 # Blank the line when done.
 
@@ -255,7 +255,7 @@ spinner () {
         if [ ${SPINNER_CLEAR} -eq 1 ]; then
           tput el
         fi
-	      rm -f ${SPINNER_DONEFILE}
+	      rm -f -- "${SPINNER_DONEFILE}"
 	      break 2
       fi
       # This is questionable. sleep with fractional seconds is not
@@ -284,15 +284,11 @@ spinner () {
 # Canonical source - http://github.com/swelljoe/run_ok
 RUN_LOG="run.log"
 
-# Check for unicode support in the shell
-# This is a weird function, but seems to work. Checks to see if a unicode char can be
-# written to a file and can be read back.
+# Check for unicode support in the shell without writing a file into the
+# caller's current directory (#65).
 shell_has_unicode () {
-  # Write a unicode character to a file...read it back and see if it's handled right.
-  env printf "\\u2714"> unitest.txt
-
-  read -r unitest < unitest.txt
-  rm -f unitest.txt
+  local unitest
+  unitest=$(printf '\u2714')
   if [ ${#unitest} -le 3 ]; then
     return 0
   else
@@ -318,7 +314,7 @@ run_ok () {
   # whole thing.
   local cmd="${1}"
   local msg="${2}"
-  local columns spinpid=''
+  local columns spinpid='' spinner_dir=''
   # At most 79; also 79 when tput cannot tell (no TERM)
   columns=$(tput cols 2>/dev/null)
   if ! [ "$columns" -lt 80 ] 2>/dev/null; then
@@ -337,23 +333,30 @@ run_ok () {
   # The spinner only makes sense on a terminal; in a file or pipe it is
   # thousands of escape codes
   if [ "$INTERACTIVE_MODE" = "on" ]; then
-    spinner &
-    spinpid=$!
-    allpids="$allpids $spinpid"
+    # Keep the stop file out of the caller's cwd and clean it up with the
+    # private directory (#65).
+    spinner_dir=$(mktemp -d "${TMPDIR:-/tmp}/slib-spinner.XXXXXXXX") || spinner_dir=''
+    if [ -n "$spinner_dir" ]; then
+      SPINNER_DONEFILE="$spinner_dir/stopspinning"
+      spinner &
+      spinpid=$!
+      allpids="$allpids $spinpid"
+    fi
   fi
   eval "${cmd}" 1>> ${RUN_LOG} 2>&1
   local res=$?
   if [ -n "$spinpid" ]; then
-    touch ${SPINNER_DONEFILE}
+    touch "$SPINNER_DONEFILE"
     env sleep .2 # It's possible to have a race for stdout and spinner clobbering the next bit
     # Just in case the spinner survived somehow, kill it.
     pidcheck=$(ps --no-headers ${spinpid})
     if [ -n "$pidcheck" ]; then
       kill $spinpid 2>/dev/null
-      rm -rf ${SPINNER_DONEFILE} 2>/dev/null 2>&1
+      rm -f "$SPINNER_DONEFILE" 2>/dev/null 2>&1
       tput rc
       tput cnorm
     fi
+    rm -rf "$spinner_dir"
   fi
   # Log what we were supposed to be running
   printf "${msg}: " >> ${RUN_LOG}

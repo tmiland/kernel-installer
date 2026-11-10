@@ -16,7 +16,7 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3
+wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
 # Fedora/RHEL
 wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
 ```
@@ -100,6 +100,8 @@ curl -s https://api.github.com/repos/tmiland/kernel-installer/releases/latest \
 | wget -qi -
 ```
 
+The release provides `kernel_installer.sh` and `SHA256SUMS`; `--update` verifies the download against the checksum before replacing the script.
+
 For main branch
 ```bash
 wget https://github.com/tmiland/kernel-installer/raw/main/kernel_installer.sh
@@ -137,7 +139,7 @@ Usage:  kernel_installer.sh [options]
 --list-installed       |-li  list installed kernels
 --default-compression  |-dc  select default compression algorithm
 --changelog            |-cl  view changelog for kernel version
---update               |-upd check for script update
+--update               |-upd check for a verified script update
 --uninstall            |-u   uninstall kernel (use with -k option)
 ```
 
@@ -216,11 +218,12 @@ Note that `--custom-config` can be used multiple times like:
 Stable, longterm and `--kernel` tarballs are cryptographically verified by default
 (`--get-verified-tarball` is accepted but no longer needed). The `sha256sums.asc`
 file is checked against the kernel.org autosigner key, and the tarball against
-the Linus Torvalds / Greg Kroah-Hartman signatures, fetched via WKD.
+the Linus Torvalds / Greg Kroah-Hartman signatures. Checkout runs use the
+bundled `src/keys/kernel.org.asc`; piped runs fetch the keys via WKD.
  - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
  - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
  - Installs `gnupg` if `gpg`/`gpgv` are not available
- - Keys are kept in `$GNUPGHOME` (default `~/.gnupg`); run with `GNUPGHOME=` (empty) to use a throwaway keyring instead
+ - A throwaway keyring is used by default; set `GNUPGHOME=/path` to reuse one. Keys are selected by exact address and exported by fingerprint (a user ID that merely contains the address is not trusted)
  - Mainline snapshots from git.kernel.org are not signed and are not verified
 
 To skip verification:
@@ -235,10 +238,10 @@ Used together:
 
 Watch install log:
 ```bash
-tail -f /var/log/kernel_installer.log
+tail -f /var/log/kernel-installer/kernel_installer.log
 ```
 
-- installation log in `/var/log/kernel_installer.log`, started fresh on every install; the previous install's log is kept as `/var/log/kernel_installer.log.1`, and `--list-installed` / `--uninstall` leave both alone
+- installation log in `/var/log/kernel-installer/kernel_installer.log` (a root-only directory), started fresh on every install; the previous install's log is kept as `kernel_installer.log.1` in the same directory, and `--list-installed` / `--uninstall` leave both alone
 - set `LOGFILE` to log somewhere else, e.g. `LOGFILE=/root/kernel-build.log ./kernel_installer.sh`
 - when the output is not a terminal (a pipe, a file, CI), the spinner and colors are turned off
 - [./src/slib.sh](https://github.com/tmiland/kernel-installer/blob/main/src/slib.sh) function script is sourced remotely if not found locally
