@@ -70,9 +70,13 @@ cat > "$work/bin/gpg" <<'EOF'
 # fake only needs to return one primary fingerprint for each exact address.
 case " $* " in
   *" --list-keys "*)
-    for addr in autosigner@kernel.org torvalds@kernel.org gregkh@kernel.org; do
+    for pair in \
+      "autosigner@kernel.org:B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1" \
+      "torvalds@kernel.org:ABAF11C65A2970B130ABE3C479BE3E4300411886" \
+      "gregkh@kernel.org:647F28654894E3BD457199BE38DBBDC86092693E"; do
+      addr=${pair%%:*}; fpr=${pair#*:}
       printf 'pub:u:1:1:0:0:0:0:0:0:0:::::\n'
-      printf 'fpr:::::::::0000000000000000000000000000000000000000:\n'
+      printf 'fpr:::::::::%s:\n' "$fpr"
       printf 'uid:u::::1700000000::0000000000000000000000000000000000000000::Test <%s>::::::::::0:\n' "$addr"
     done
     ;;
@@ -93,12 +97,15 @@ cp "$work/bin/gpgv" "$work/bin/gpgv2"
 chmod +x "$work/bin/curl" "$work/bin/gpg" "$work/bin/gpgv" "$work/bin/xz" "$work/bin/gpg2" "$work/bin/gpgv2"
 
 # Point the function's hard-coded helpers at the fakes.
-funcs=$(sed -n -e '/^key_fingerprints() {/,/^}/p' -e '/^verify_fail() {/,/^}/p' -e '/^get_verified_tarball() {/,/^}/p' "$SCRIPT" |
+funcs=$(sed -n -e '/^key_fingerprints() {/,/^}/p' -e '/^check_kernel_key_fingerprints() {/,/^}/p' -e '/^verify_fail() {/,/^}/p' -e '/^get_verified_tarball() {/,/^}/p' "$SCRIPT" |
   sed "s|/usr/bin/curl|$work/bin/curl|g; s|/usr/bin/xz|$work/bin/xz|g")
-for name in key_fingerprints verify_fail get_verified_tarball; do
+for name in key_fingerprints check_kernel_key_fingerprints verify_fail get_verified_tarball; do
   grep -q "^${name}() {" <<<"$funcs" || { echo "FAIL: ${name}() not found"; exit 1; }
 done
 
+TORVALDS_FPR=ABAF11C65A2970B130ABE3C479BE3E4300411886
+GREGKH_FPR=647F28654894E3BD457199BE38DBBDC86092693E
+AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 out=$(
   (
     export PATH="$work/bin:$PATH"

@@ -57,6 +57,12 @@ if [[ -n ${BASH_SOURCE[0]} ]]; then
 fi
 SCRIPT_FILENAME=$(basename "$self")
 SCRIPT_DIR=$(dirname "$self")
+# Bundled kernel.org signing keys (public) and their pinned primary
+# fingerprints. Checkout runs import the bundle; piped runs fall back to WKD.
+KERNEL_KEYRING_FILE=src/keys/kernel.org.asc
+TORVALDS_FPR=ABAF11C65A2970B130ABE3C479BE3E4300411886
+GREGKH_FPR=647F28654894E3BD457199BE38DBBDC86092693E
+AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
@@ -1297,6 +1303,19 @@ key_fingerprints() {
     '
 }
 
+# Require exactly the pinned primary key for each kernel.org address, so a
+# bundled file or a WKD response cannot substitute a different key.
+check_kernel_key_fingerprints() {
+  local gpgbin=$1 home=$2
+  local -a fprs
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" torvalds@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${TORVALDS_FPR}" ] || return 1
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" gregkh@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${GREGKH_FPR}" ] || return 1
+  mapfile -t fprs < <(key_fingerprints "${gpgbin}" "${home}" autosigner@kernel.org)
+  [ ${#fprs[@]} -eq 1 ] && [ "${fprs[0]}" = "${AUTOSIGNER_FPR}" ] || return 1
+}
+
 # shellcheck disable=SC2329  # only called from get_verified_tarball (see there)
 verify_fail() {
   VERIFY_ERROR=$1
@@ -1419,33 +1438,53 @@ get_verified_tarball() {
   fi
   verify_dir=$TMPDIR
   log_debug "Using TMPDIR=${TMPDIR}"
-  # Build a private homedir containing exactly the keys to trust. Fedora's
-  # gpg enables use-keyboxd, which makes --keyring on a file ignored for
-  # --list-keys, so selection and export both use a homedir (#68).
+  # Build a private homedir containing exactly the keys to trust. A checkout
+  # has src/keys/kernel.org.asc and uses it (no WKD/dirmngr dependency); piped
+  # runs fall back to WKD. Fedora's gpg enables use-keyboxd, which makes
+  # --keyring on a file ignored for --list-keys, so selection and export both
+  # use a homedir (#68).
   if [[ -z ${USEKEYRING} ]]; then
-    if [[ -z ${GNUPGHOME} ]]; then
-      GNUPGHOME="${TMPDIR}/gnupg"
-    fi
-    mkdir -p -m 0700 "${GNUPGHOME}"
-    log_debug "Making sure we have all the necessary keys"
-    ok=0
-    # dirmngr occasionally fails to start on the first attempt in a fresh
-    # container (and WKD needs it); retry before giving up.
-    for _ in 1 2 3; do
-      if ${GPGBIN} --batch --quiet \
-        --homedir "${GNUPGHOME}" \
-        --auto-key-locate wkd \
-        --locate-keys ${DEVKEYS} ${SHAKEYS}; then
-        ok=1
-        break
+    if [[ -n ${self:-} && -f "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" ]]; then
+      keyring_home=$(mktemp -d "${TMPDIR}/gnupg-bundled.XXXXXXXX") || {
+        verify_fail "Could not create a temporary homedir for the bundled keys"
+        return 1
+      }
+      chmod 700 "${keyring_home}"
+      if ! ${GPGBIN} --batch --homedir "${keyring_home}" \
+        --import "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" >/dev/null 2>&1; then
+        verify_fail "Could not import the bundled kernel.org signing keys"
+        return 1
       fi
-      sleep 1
-    done
-    if [[ $ok != 1 ]]; then
-      verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
+      log_debug "Using bundled kernel.org signing keys"
+    else
+      if [[ -z ${GNUPGHOME} ]]; then
+        GNUPGHOME="${TMPDIR}/gnupg"
+      fi
+      mkdir -p -m 0700 "${GNUPGHOME}"
+      log_debug "Making sure we have all the necessary keys"
+      ok=0
+      # dirmngr occasionally fails to start on the first attempt in a fresh
+      # container (and WKD needs it); retry before giving up.
+      for _ in 1 2 3; do
+        if ${GPGBIN} --batch --quiet \
+          --homedir "${GNUPGHOME}" \
+          --auto-key-locate wkd \
+          --locate-keys ${DEVKEYS} ${SHAKEYS}; then
+          ok=1
+          break
+        fi
+        sleep 1
+      done
+      if [[ $ok != 1 ]]; then
+        verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
+        return 1
+      fi
+      keyring_home=$GNUPGHOME
+    fi
+    if ! check_kernel_key_fingerprints "${GPGBIN}" "${keyring_home}"; then
+      verify_fail "The kernel.org signing keys do not match the pinned fingerprints"
       return 1
     fi
-    keyring_home=$GNUPGHOME
   else
     keyring_home=$(mktemp -d "${TMPDIR}/gnupg-keyring.XXXXXXXX") || {
       verify_fail "Could not create a temporary homedir for USEKEYRING"
@@ -1454,6 +1493,10 @@ get_verified_tarball() {
     chmod 700 "${keyring_home}"
     if ! ${GPGBIN} --batch --homedir "${keyring_home}" --import "${USEKEYRING}" >/dev/null 2>&1; then
       verify_fail "Could not import USEKEYRING ${USEKEYRING}"
+      return 1
+    fi
+    if ! check_kernel_key_fingerprints "${GPGBIN}" "${keyring_home}"; then
+      verify_fail "USEKEYRING does not contain the pinned kernel.org signing keys"
       return 1
     fi
   fi

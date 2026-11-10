@@ -218,7 +218,8 @@ Note that `--custom-config` can be used multiple times like:
 Stable, longterm and `--kernel` tarballs are cryptographically verified by default
 (`--get-verified-tarball` is accepted but no longer needed). The `sha256sums.asc`
 file is checked against the kernel.org autosigner key, and the tarball against
-the Linus Torvalds / Greg Kroah-Hartman signatures, fetched via WKD.
+the Linus Torvalds / Greg Kroah-Hartman signatures. Checkout runs use the
+bundled `src/keys/kernel.org.asc`; piped runs fetch the keys via WKD.
  - [Linux kernel releases PGP signatures](https://www.kernel.org/category/signatures.html)
  - Source script [get-verified-tarball](https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball)
  - Installs `gnupg` if `gpg`/`gpgv` are not available
