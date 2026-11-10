@@ -75,6 +75,8 @@ check "custom USEKEYRING is imported into a homedir" grep -qF -- '--import "${US
 check "key selection lists from a homedir, not a keyring file" grep -qF -- '--homedir "${homedir}" --with-colons --list-keys' "$SCRIPT"
 check "checkout runs use the bundled keyring" grep -qF -- '-f "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}"' "$SCRIPT"
 check "the pinned fingerprints are checked" grep -qF 'check_kernel_key_fingerprints "${GPGBIN}" "${keyring_home}"' "$SCRIPT"
+check "gpg homes use a short /tmp path" grep -qF '${GPG_TMPDIR:-/tmp}/kernel-installer-gpg' "$SCRIPT"
+check "verify_fail removes the gpg root" grep -qF 'rm -rf "$gpg_root"' "$SCRIPT"
 check "SHA keyring is exported by fingerprint" grep -q -- '--export "\${SHA_FPRS\[@\]}"' "$SCRIPT"
 check "DEV keyring is exported by fingerprint" grep -q -- '--export "\${DEV_FPRS\[@\]}"' "$SCRIPT"
 

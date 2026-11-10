@@ -1322,13 +1322,16 @@ verify_fail() {
   if [ -n "${verify_dir:-}" ]; then
     rm -rf "$verify_dir"
   fi
+  if [ -n "${gpg_root:-}" ]; then
+    rm -rf "$gpg_root"
+  fi
 }
 
 # shellcheck disable=SC2329  # called by name through run_ok
 get_verified_tarball() {
   # Keep the verify directory out of the environment: this function must not
   # clobber an exported TMPDIR, whose value later build steps rely on (#48).
-  local TMPDIR keyring_home ok
+  local TMPDIR keyring_home ok gpg_root=''
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
   # --------------------
@@ -1438,6 +1441,13 @@ get_verified_tarball() {
   fi
   verify_dir=$TMPDIR
   log_debug "Using TMPDIR=${TMPDIR}"
+  # GnuPG sockets have a ~108-character path limit; the build directory can be
+  # deep (e.g. --dir under a long CI workspace), so keep gpg homes in /tmp.
+  gpg_root=$(mktemp -d "${GPG_TMPDIR:-/tmp}/kernel-installer-gpg.XXXXXXXX") || {
+    verify_fail "Could not create a temporary GnuPG directory"
+    return 1
+  }
+  chmod 700 "${gpg_root}"
   # Build a private homedir containing exactly the keys to trust. A checkout
   # has src/keys/kernel.org.asc and uses it (no WKD/dirmngr dependency); piped
   # runs fall back to WKD. Fedora's gpg enables use-keyboxd, which makes
@@ -1445,11 +1455,8 @@ get_verified_tarball() {
   # use a homedir (#68).
   if [[ -z ${USEKEYRING} ]]; then
     if [[ -n ${self:-} && -f "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" ]]; then
-      keyring_home=$(mktemp -d "${TMPDIR}/gnupg-bundled.XXXXXXXX") || {
-        verify_fail "Could not create a temporary homedir for the bundled keys"
-        return 1
-      }
-      chmod 700 "${keyring_home}"
+      keyring_home="${gpg_root}/bundled"
+      mkdir -m 0700 "${keyring_home}"
       if ! ${GPGBIN} --batch --homedir "${keyring_home}" \
         --import "${SCRIPT_DIR}/${KERNEL_KEYRING_FILE}" >/dev/null 2>&1; then
         verify_fail "Could not import the bundled kernel.org signing keys"
@@ -1458,7 +1465,7 @@ get_verified_tarball() {
       log_debug "Using bundled kernel.org signing keys"
     else
       if [[ -z ${GNUPGHOME} ]]; then
-        GNUPGHOME="${TMPDIR}/gnupg"
+        GNUPGHOME="${gpg_root}/wkd"
       fi
       mkdir -p -m 0700 "${GNUPGHOME}"
       log_debug "Making sure we have all the necessary keys"
@@ -1486,11 +1493,8 @@ get_verified_tarball() {
       return 1
     fi
   else
-    keyring_home=$(mktemp -d "${TMPDIR}/gnupg-keyring.XXXXXXXX") || {
-      verify_fail "Could not create a temporary homedir for USEKEYRING"
-      return 1
-    }
-    chmod 700 "${keyring_home}"
+    keyring_home="${gpg_root}/custom"
+    mkdir -m 0700 "${keyring_home}"
     if ! ${GPGBIN} --batch --homedir "${keyring_home}" --import "${USEKEYRING}" >/dev/null 2>&1; then
       verify_fail "Could not import USEKEYRING ${USEKEYRING}"
       return 1
@@ -1587,6 +1591,7 @@ get_verified_tarball() {
   fi
   mv -f "${TXZFILE}" "${TARGET}"
   rm -rf "${TMPDIR}"
+  rm -rf "${gpg_root}"
   echo
   log_success "Successfully downloaded and verified ${TARGET}"
 }
