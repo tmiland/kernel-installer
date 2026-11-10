@@ -1670,8 +1670,7 @@ install_kernel() {
       log_error "Kernel build did not produce packages for ${LINUX_VER}; aborting before installation. See ${RUN_LOG} for build errors."
       exit 1
     fi
-    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel headers: ${LINUX_VER}"
-    run_ok "${INSTALL} ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image: ${LINUX_VER}"
+    run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image and headers: ${LINUX_VER}"
   fi
   log_success "Installation finished"
   # else
