@@ -189,7 +189,7 @@ fatal() {
   printf "%s \\n" "${RED}Cannot continue installation.${NORMAL}"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
-    rm -rf "$INSTALL_DIR"
+    remove_install_dir "$INSTALL_DIR" || log_warning "Could not completely remove $INSTALL_DIR."
   elif [ -d "$INSTALL_DIR" ]; then
     log_warning "Not removing $INSTALL_DIR: it may contain files not created by this installer."
   fi
@@ -286,6 +286,9 @@ is_safe_install_dir() {
   if [ -z "$dir" ] || [ "$dir" = "/" ] || [ ! -d "$dir" ]; then
     return 1
   fi
+  if [ -L "$dir" ]; then
+    return 1
+  fi
   if [ -e "$dir/$INSTALL_DIR_MARKER" ]; then
     return 0
   fi
@@ -293,6 +296,73 @@ is_safe_install_dir() {
     return 0
   fi
   return 1
+}
+
+# Delete a build directory this installer owns, removing the marker last so an
+# interrupted delete leaves a folder the next run can still recognise (#69).
+remove_install_dir() {
+  local dir=$1
+  if [ -z "$dir" ] || [ "$dir" = "/" ] || [ ! -d "$dir" ]; then
+    return 1
+  fi
+  if ! find "$dir" -mindepth 1 ! -name "$INSTALL_DIR_MARKER" -delete; then
+    return 1
+  fi
+  rm -f -- "$dir/$INSTALL_DIR_MARKER" || return 1
+  rmdir -- "$dir" 2>/dev/null || true
+  return 0
+}
+
+# Create a fresh build directory for this run. Refuse symlinks, folders owned
+# by another user, and shared parents another user can replace entries in: the
+# tree is built as root, so a nested attacker-controlled folder would let them
+# swap the tarball or source between verification and the build (#62).
+prepare_install_dir() {
+  local dir=$INSTALL_DIR parent parent_uid caller_uid mode
+  parent=$(dirname -- "$dir")
+  if [ ! -d "$parent" ]; then
+    if ! mkdir -p -- "$parent"; then
+      fatal "Could not create install directory parent $parent"
+    fi
+  fi
+  if [ -L "$parent" ]; then
+    fatal "Install directory parent $parent is a symlink; refusing to use it."
+  fi
+  mode=$(stat -c '%a' -- "$parent" 2>/dev/null) ||
+    fatal "Could not read the permissions of $parent."
+  # A non-sticky group/other-writable parent lets another user rename or
+  # replace the build folder; sticky shared folders (/tmp, /var/tmp) do not.
+  if (( (8#$mode & 0022) != 0 && (8#$mode & 01000) == 0 )); then
+    fatal "Install directory parent $parent is writable by group or others and is not sticky; choose a directory only you (and root) can write to."
+  fi
+  parent_uid=$(stat -c '%u' -- "$parent" 2>/dev/null) ||
+    fatal "Could not read the owner of $parent."
+  caller_uid=${SUDO_UID:-$(id -u)}
+  if [ "$parent_uid" != "0" ] && [ "$parent_uid" != "$caller_uid" ]; then
+    fatal "Install directory parent $parent is owned by another user; choose a directory you own."
+  fi
+  if [ -e "$dir" ] || [ -L "$dir" ]; then
+    if ! is_safe_install_dir "$dir"; then
+      fatal "Install directory $dir is not empty and does not look like it was created by this script. Refusing to delete its contents; use an empty directory or clean it up yourself."
+    fi
+    if ! remove_install_dir "$dir"; then
+      fatal "Could not remove the previous build directory $dir."
+    fi
+  fi
+  if ! mkdir -m 0755 -- "$dir"; then
+    fatal "Could not create install directory $dir"
+  fi
+  if [ -L "$dir" ] || [ ! -O "$dir" ]; then
+    fatal "Install directory $dir is not owned by the current user; refusing to build in it."
+  fi
+  mode=$(stat -c '%a' -- "$dir" 2>/dev/null) ||
+    fatal "Could not read the permissions of $dir."
+  if (( (8#$mode & 0022) != 0 )); then
+    fatal "Install directory $dir is writable by group or others; refusing to build in it."
+  fi
+  if ! touch -- "$dir/$INSTALL_DIR_MARKER"; then
+    fatal "Could not create the marker file in $dir"
+  fi
 }
 
 read_sleep() {
@@ -432,9 +502,17 @@ chk_kernel() {
   fi
 }
 
+# A kernel version is digits.digits plus an optional release suffix such as
+# -rc7, -38-generic or -300.fc44.x86_64. Only these characters are used: the
+# version is pasted into run_ok commands (which eval), so shell metacharacters,
+# spaces and path separators must never get through (#63).
+valid_kernel_version() {
+  [[ $1 =~ ^[0-9]+\.[0-9]+[0-9A-Za-z.+~_-]*$ ]]
+}
+
 # Make sure a valid kernel version was determined before doing anything destructive
 chk_version() {
-  if [[ ! $LINUX_VER =~ ^[0-9]+\.[0-9]+ ]]; then
+  if ! valid_kernel_version "$LINUX_VER"; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Could not determine a valid kernel version (got: '${YELLOW}${LINUX_VER}${NORMAL}'). Check your network connection or specify a version with ${CYAN}--kernel${NORMAL}."
   fi
 }
@@ -742,7 +820,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --kernel | -k)
       require_arg "$1" "${2:-}"
-      if [[ ! $2 =~ ^[0-9] ]]; then
+      if ! valid_kernel_version "$2"; then
         fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Invalid kernel version: $2"
       fi
       LINUX_VER="$2"
@@ -1166,12 +1244,9 @@ get_verified_tarball() {
   fi
 
   TARGET="${TARGETDIR}/linux-${LINUX_VER}.tar.xz"
-  # Do we already have this file?
-  if [[ -f ${TARGET} ]]; then
-    log_debug "File ${TARGETDIR}/linux-${LINUX_VER}.tar.xz already exists."
-    echo "Skipping download..."
-    return 0
-  fi
+  # Never trust an existing tarball: the build directory is recreated for each
+  # run, so a file here can only come from an interrupted run or from someone
+  # who can write to the directory. Download and verify it again (#62).
 
   # Start by making sure our GnuPG environment is sane
   if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
@@ -1388,20 +1463,9 @@ install_kernel() {
   # Download Linux source code
   log_debug "Phase 2 of 6: Linux source code download"
   printf "%s \\n" "${GREEN}▣${YELLOW}▣${CYAN}□□□□${NORMAL} Phase ${YELLOW}2${NORMAL} of ${GREEN}6${NORMAL}: Download Linux source code"
-  if [ ! -d "$INSTALL_DIR" ]; then
-    if ! mkdir -p "$INSTALL_DIR" 1>/dev/null 2>&1; then
-      fatal "Could not create install directory $INSTALL_DIR"
-    fi
-  fi
+  log_debug "Deleting old Linux source code files in $INSTALL_DIR"
+  prepare_install_dir
   if [ -d "$INSTALL_DIR" ]; then
-    if ! is_safe_install_dir "$INSTALL_DIR"; then
-      fatal "Install directory $INSTALL_DIR is not empty and does not look like it was created by this script. Refusing to delete its contents; use an empty directory or clean it up yourself."
-    fi
-    #(
-    #cd "$INSTALL_DIR"/linux || exit
-    log_debug "Deleting old Linux source code files in $INSTALL_DIR"
-    rm -rf "$INSTALL_DIR" && mkdir -p "$INSTALL_DIR"
-    touch "$INSTALL_DIR/$INSTALL_DIR_MARKER"
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
     if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
@@ -1602,8 +1666,8 @@ install_kernel() {
   printf "%s \\n" "${GREEN}▣▣▣▣▣▣${NORMAL} Cleaning up"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_debug "Cleaning up temporary files in $INSTALL_DIR."
-    find "$INSTALL_DIR" -mindepth 1 -delete
-    rmdir "$INSTALL_DIR" 2>/dev/null || true
+    remove_install_dir "$INSTALL_DIR" ||
+      log_error "Could not completely clean up $INSTALL_DIR."
   else
     log_error "Could not safely clean up temporary files because INSTALL DIR set to $INSTALL_DIR."
   fi
@@ -1709,7 +1773,8 @@ else
   printf "%s" "${errorlist}"
   if [ -d "$INSTALL_DIR" ] && is_safe_install_dir "$INSTALL_DIR"; then
     log_warning "Removing temporary directory and files."
-    rm -rf "$INSTALL_DIR"
+    remove_install_dir "$INSTALL_DIR" ||
+      log_warning "Could not completely remove $INSTALL_DIR."
   fi
 fi
 
