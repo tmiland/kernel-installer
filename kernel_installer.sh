@@ -61,6 +61,8 @@ SCRIPT_DIR=$(dirname "$self")
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
 LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
+# One installer at a time: two runs would share the build folder and log (#70)
+LOCK_FILE=${LOCK_FILE:-/run/kernel_installer.lock}
 # Default processing units (all available)
 NPROC=${NPROC:-$(nproc)}
 # Console output level; ignore debug level messages.
@@ -269,6 +271,27 @@ report_build_failure() {
     fi
   fi
   log_error "The build tree is kept in ${INSTALL_DIR} for inspection (it is removed on the next run)."
+}
+
+# Refuse to start while another run holds the lock. This deliberately does not
+# go through fatal(): fatal removes INSTALL_DIR, which would delete the build
+# tree of the run that currently holds the lock.
+take_lock() {
+  if ! command -v flock >/dev/null 2>&1; then
+    printf 'Cannot start: flock (util-linux) is not installed.\n' >&2
+    exit 1
+  fi
+  if [ ! -d "$(dirname -- "$LOCK_FILE")" ]; then
+    LOCK_FILE=/var/lock/kernel_installer.lock
+  fi
+  if ! exec 9>>"$LOCK_FILE"; then
+    printf 'Cannot open lock file %s.\n' "$LOCK_FILE" >&2
+    exit 1
+  fi
+  if ! flock -n 9; then
+    printf 'Another kernel_installer run is already in progress (lock: %s).\n' "$LOCK_FILE" >&2
+    exit 1
+  fi
 }
 
 # Start an install with an empty log and keep the previous one as
@@ -1687,6 +1710,7 @@ install_kernel() {
 # (the root check, chk_permissions, ran during argument parsing)
 # Uninstall kernel
 if [ "$mode" = "uninstall" ]; then
+  take_lock
   if [ "$VER_SELECTED" != "1" ]; then
     fatal "${RED}${BALLOT_X}Fatal:${NORMAL} No kernel version selected for uninstall. Use ${CYAN}--kernel${NORMAL} to select one."
   fi
@@ -1752,6 +1776,7 @@ fi
 # Install Kernel
 # Only an install starts a new log; --list-installed and --uninstall above
 # leave the last one in place
+take_lock
 rotate_log
 chk_version
 chk_kernel
