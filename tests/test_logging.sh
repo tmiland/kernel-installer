@@ -53,9 +53,9 @@ if ! command -v script >/dev/null 2>&1; then
   echo "FAIL: script(1) not found (util-linux); cannot test terminal output"
   fail=1
 else
-  # The spinner cannot be told to stop when its done-file cannot be created
-  # (read-only directory), so run_ok finds it still running every time; that
-  # is the case that logged "Made it here...why?".
+  # A read-only cwd: the spinner keeps its stop file in a private temp
+  # directory now (#65), so this also proves nothing is written into cwd. The
+  # surviving-spinner branch remains guarded by the kill/ps check below.
   mkdir "$work/ro"
   chmod a-w "$work/ro"
   (
@@ -67,8 +67,8 @@ else
   check "terminal: the spinner still runs" grep -qE '▒|\[>----\]' "$work/out3"
   check "terminal: run_ok does not log the spinner pid" not grep -q 'Spin pid is' "$work/log3"
   check "terminal: a surviving spinner is not logged as 'Made it here'" not grep -q 'Made it here' "$work/log3"
-  check "terminal: the case above really had a surviving spinner (instrument check)" \
-    grep -q 'stopspinning' "$work/out3"
+  check "terminal: run_ok does not create stopspinning in cwd" not test -e "$work/ro/stopspinning"
+  check "terminal: run_ok does not create unitest.txt in cwd" not test -e "$work/ro/unitest.txt"
 fi
 
 # 4. LOGFILE from the environment is used, and --list-installed keeps the
