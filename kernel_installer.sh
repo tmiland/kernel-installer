@@ -1402,15 +1402,22 @@ get_verified_tarball() {
     return 1
   fi
   log_debug "Verifying the checksums file"
-  COUNT=$(${GPGVBIN} --keyring=${SHAKEYRING} --status-fd=1 ${SHAFILE} \
-    | grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)')
+  SHAFILE_SIGNED=${TMPDIR}/sha256sums.signed
+  STATUSFILE=${TMPDIR}/sha256sums.status
+  if ! ${GPGVBIN} --keyring=${SHAKEYRING} --status-fd=1 \
+    --output "${SHAFILE_SIGNED}" "${SHAFILE}" > "${STATUSFILE}"; then
+    verify_fail "FAILED to verify the sha256sums.asc file."
+    return 1
+  fi
+  COUNT=$(grep -c -E '^\[GNUPG:\] (GOODSIG|VALIDSIG)' "${STATUSFILE}")
   if [[ ${COUNT} -lt 2 ]]; then
     verify_fail "FAILED to verify the sha256sums.asc file."
     return 1
   fi
-  # Grab only the tarball we want from the full list
+  # Grab only the tarball we want from gpgv's output, never from text appended
+  # after the signature block in the clearsigned file (#67).
   SHACHECK=${TMPDIR}/sha256sums.txt
-  grep "linux-${LINUX_VER}.tar.xz" ${SHAFILE} > ${SHACHECK}
+  grep "linux-${LINUX_VER}.tar.xz" "${SHAFILE_SIGNED}" > "${SHACHECK}"
 
   echo
   log_debug "Downloading the signature file for linux-${LINUX_VER}"
