@@ -38,18 +38,27 @@ substring=$(gpg --batch --with-colons --list-keys '<notsigner@example.invalid>' 
 check "test keys are distinct" test -n "$exact" -a -n "$substring" -a "$exact" != "$substring"
 
 gpg --batch --export > "$work/all.gpg"
-got=$(key_fingerprints "$(command -v gpg)" "$work/all.gpg" signer@example.invalid)
+got=$(key_fingerprints "$(command -v gpg)" "$GNUPGHOME" signer@example.invalid)
 check "the exact address is selected" grep -qx "$exact" <<<"$got"
 check "the substring address is not selected" not grep -qx "$substring" <<<"$got"
 
-got_other=$(key_fingerprints "$(command -v gpg)" "$work/all.gpg" notsigner@example.invalid)
+got_other=$(key_fingerprints "$(command -v gpg)" "$GNUPGHOME" notsigner@example.invalid)
 check "the longer address still selects its own key" grep -qx "$substring" <<<"$got_other"
+
+# A custom USEKEYRING is imported into a private homedir before selection.
+imported="$work/imported"
+mkdir -m 0700 "$imported"
+gpg --batch --homedir "$imported" --import "$work/all.gpg" 2>/dev/null
+got_imported=$(key_fingerprints "$(command -v gpg)" "$imported" signer@example.invalid)
+check "an imported keyring keeps the exact-address selection" grep -qx "$exact" <<<"$got_imported"
 
 # Static checks: throwaway keyring by default, and final keyrings built from
 # exact fingerprints rather than bare addresses.
 check "GNUPGHOME defaults to empty (throwaway keyring)" grep -qF 'GNUPGHOME=${GNUPGHOME-}' "$SCRIPT"
-check "get_verified_tarball selects fingerprints" grep -qF 'key_fingerprints "${GPGBIN}"' "$SCRIPT"
-check "the temporary keyring is exported from GNUPGHOME" grep -qF -- '--homedir "${GNUPGHOME}" --export' "$SCRIPT"
+check "get_verified_tarball selects fingerprints" grep -qF 'key_fingerprints "${GPGBIN}" "${keyring_home}"' "$SCRIPT"
+check "the trusted keyring is exported from its homedir" grep -qF -- '--homedir "${keyring_home}"' "$SCRIPT"
+check "custom USEKEYRING is imported into a homedir" grep -qF -- '--import "${USEKEYRING}"' "$SCRIPT"
+check "key selection lists from a homedir, not a keyring file" grep -qF -- '--homedir "${homedir}" --with-colons --list-keys' "$SCRIPT"
 check "SHA keyring is exported by fingerprint" grep -q -- '--export "\${SHA_FPRS\[@\]}"' "$SCRIPT"
 check "DEV keyring is exported by fingerprint" grep -q -- '--export "\${DEV_FPRS\[@\]}"' "$SCRIPT"
 

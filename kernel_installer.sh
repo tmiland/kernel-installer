@@ -1203,7 +1203,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1283,16 +1283,17 @@ esac
 # must return instead of exiting: an exit there ended the whole run with
 # nothing on screen (#50). The caller shows VERIFY_ERROR.
 # Print the primary fingerprints of keys whose user ID is exactly <email> in
-# the given keyring. gpg --export matches user IDs by substring, so a bare
-# address must never decide which keys are trusted (#68).
+# the given GnuPG homedir. gpg --export/--list-keys match user IDs by
+# substring, and Fedora's gpg ignores --keyring for listing when use-keyboxd
+# is enabled, so select from a homedir instead (#68).
 key_fingerprints() {
-  local gpgbin=$1 keyring=$2 email=$3
-  "${gpgbin}" --batch --no-default-keyring --keyring "${keyring}" \
-    --with-colons --list-keys "<${email}>" 2>/dev/null |
-    awk -F: '
-      $1 == "pub" { want = 1; next }
-      $1 == "sub" { want = 0 }
-      want && $1 == "fpr" { print $10; want = 0 }
+  local gpgbin=$1 homedir=$2 email=$3
+  "${gpgbin}" --batch --homedir "${homedir}" --with-colons --list-keys 2>/dev/null |
+    awk -F: -v want="<${email}>" '
+      $1 == "pub" { inkey = 1; fpr = ""; next }
+      $1 == "sub" { inkey = 0 }
+      inkey && $1 == "fpr" { fpr = $10; next }
+      inkey && $1 == "uid" { if (index($10, want) > 0) { print fpr; inkey = 0 } }
     '
 }
 
@@ -1308,7 +1309,7 @@ verify_fail() {
 get_verified_tarball() {
   # Keep the verify directory out of the environment: this function must not
   # clobber an exported TMPDIR, whose value later build steps rely on (#48).
-  local TMPDIR
+  local TMPDIR keyring_home ok
   # Source: https://git.kernel.org/pub/scm/linux/kernel/git/mricon/korg-helpers.git/tree/get-verified-tarball
   # get-verified-tarball
   # --------------------
@@ -1401,7 +1402,7 @@ get_verified_tarball() {
   if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
     echo "Could not find gpg or gpgv, installing gnupg"
     log_debug "Installing gnupg"
-    ${INSTALL} gnupg
+    ${INSTALL} gnupg ca-certificates
     GPGBIN="$(command -v gpg2 || command -v gpg)"
     GPGVBIN="$(command -v gpgv2 || command -v gpgv)"
     if [[ ! -x ${GPGBIN} || ! -x ${GPGVBIN} ]]; then
@@ -1418,34 +1419,43 @@ get_verified_tarball() {
   fi
   verify_dir=$TMPDIR
   log_debug "Using TMPDIR=${TMPDIR}"
-  # Are we using a keyring?
+  # Build a private homedir containing exactly the keys to trust. Fedora's
+  # gpg enables use-keyboxd, which makes --keyring on a file ignored for
+  # --list-keys, so selection and export both use a homedir (#68).
   if [[ -z ${USEKEYRING} ]]; then
     if [[ -z ${GNUPGHOME} ]]; then
       GNUPGHOME="${TMPDIR}/gnupg"
-      # elif [[ ! -d ${GNUPGHOME} ]]; then
-      #   echo "GNUPGHOME directory ${GNUPGHOME} does not exist"
-      #   echo -n "Create it? [Y/n]"
-      #   read -r YN
-      #   if [[ ${YN} == 'n' ]]; then
-      #     echo "Exiting"
-      #     rm -rf "${TMPDIR}"
-      #     exit 1
-      #   fi
     fi
     mkdir -p -m 0700 "${GNUPGHOME}"
     log_debug "Making sure we have all the necessary keys"
-    ${GPGBIN} --batch --quiet \
-      --homedir "${GNUPGHOME}" \
-      --auto-key-locate wkd \
-      --locate-keys ${DEVKEYS} ${SHAKEYS}
-    # If this returned non-0, we bail
-    if [[ $? != "0" ]]; then
+    ok=0
+    # dirmngr occasionally fails to start on the first attempt in a fresh
+    # container (and WKD needs it); retry before giving up.
+    for _ in 1 2 3; do
+      if ${GPGBIN} --batch --quiet \
+        --homedir "${GNUPGHOME}" \
+        --auto-key-locate wkd \
+        --locate-keys ${DEVKEYS} ${SHAKEYS}; then
+        ok=1
+        break
+      fi
+      sleep 1
+    done
+    if [[ $ok != 1 ]]; then
       verify_fail "Could not fetch the kernel.org signing keys (gpg --locate-keys via WKD failed)"
       return 1
     fi
-    # Make a temporary keyring and set USEKEYRING to it
-    USEKEYRING=${TMPDIR}/keyring.gpg
-    ${GPGBIN} --batch --homedir "${GNUPGHOME}" --export ${DEVKEYS} ${SHAKEYS} > ${USEKEYRING}
+    keyring_home=$GNUPGHOME
+  else
+    keyring_home=$(mktemp -d "${TMPDIR}/gnupg-keyring.XXXXXXXX") || {
+      verify_fail "Could not create a temporary homedir for USEKEYRING"
+      return 1
+    }
+    chmod 700 "${keyring_home}"
+    if ! ${GPGBIN} --batch --homedir "${keyring_home}" --import "${USEKEYRING}" >/dev/null 2>&1; then
+      verify_fail "Could not import USEKEYRING ${USEKEYRING}"
+      return 1
+    fi
   fi
   # Now we make two keyrings -- one for the autosigner, and
   # the other for kernel developers. We do this in order to
@@ -1454,20 +1464,18 @@ get_verified_tarball() {
   # export by fingerprint: gpg --export a@b also matches *a@b* (#68).
   SHAKEYRING=${TMPDIR}/shakeyring.gpg
   DEVKEYRING=${TMPDIR}/devkeyring.gpg
-  mapfile -t SHA_FPRS < <(key_fingerprints "${GPGBIN}" "${USEKEYRING}" autosigner@kernel.org)
+  mapfile -t SHA_FPRS < <(key_fingerprints "${GPGBIN}" "${keyring_home}" autosigner@kernel.org)
   mapfile -t DEV_FPRS < <(
-    key_fingerprints "${GPGBIN}" "${USEKEYRING}" torvalds@kernel.org
-    key_fingerprints "${GPGBIN}" "${USEKEYRING}" gregkh@kernel.org
+    key_fingerprints "${GPGBIN}" "${keyring_home}" torvalds@kernel.org
+    key_fingerprints "${GPGBIN}" "${keyring_home}" gregkh@kernel.org
   )
   if [ ${#SHA_FPRS[@]} -eq 0 ] || [ ${#DEV_FPRS[@]} -eq 0 ]; then
     verify_fail "Could not find the expected kernel.org signing keys (exact addresses) in the keyring"
     return 1
   fi
-  ${GPGBIN} --batch \
-    --no-default-keyring --keyring "${USEKEYRING}" \
+  ${GPGBIN} --batch --homedir "${keyring_home}" \
     --export "${SHA_FPRS[@]}" > "${SHAKEYRING}"
-  ${GPGBIN} --batch \
-    --no-default-keyring --keyring "${USEKEYRING}" \
+  ${GPGBIN} --batch --homedir "${keyring_home}" \
     --export "${DEV_FPRS[@]}" > "${DEVKEYRING}"
 
   # Now that we know we can verify them, grab the contents

@@ -69,7 +69,13 @@ cat > "$work/bin/gpg" <<'EOF'
 # Fingerprint selection is exercised by test_gpg_key_selection.sh; here the
 # fake only needs to return one primary fingerprint for each exact address.
 case " $* " in
-  *" --list-keys "*) printf 'pub:u:1:1:0:0:0:0:0:0:0:::::\nfpr:::::::::0000000000000000000000000000000000000000:\n' ;;
+  *" --list-keys "*)
+    for addr in autosigner@kernel.org torvalds@kernel.org gregkh@kernel.org; do
+      printf 'pub:u:1:1:0:0:0:0:0:0:0:::::\n'
+      printf 'fpr:::::::::0000000000000000000000000000000000000000:\n'
+      printf 'uid:u::::1700000000::0000000000000000000000000000000000000000::Test <%s>::::::::::0:\n' "$addr"
+    done
+    ;;
   *) : ;;
 esac
 exit 0
