@@ -235,10 +235,10 @@ Used together:
 
 Watch install log:
 ```bash
-tail -f /var/log/kernel_installer.log
+tail -f /var/log/kernel-installer/kernel_installer.log
 ```
 
-- installation log in `/var/log/kernel_installer.log`, started fresh on every install; the previous install's log is kept as `/var/log/kernel_installer.log.1`, and `--list-installed` / `--uninstall` leave both alone
+- installation log in `/var/log/kernel-installer/kernel_installer.log` (a root-only directory), started fresh on every install; the previous install's log is kept as `kernel_installer.log.1` in the same directory, and `--list-installed` / `--uninstall` leave both alone
 - set `LOGFILE` to log somewhere else, e.g. `LOGFILE=/root/kernel-build.log ./kernel_installer.sh`
 - when the output is not a terminal (a pipe, a file, CI), the spinner and colors are turned off
 - [./src/slib.sh](https://github.com/tmiland/kernel-installer/blob/main/src/slib.sh) function script is sourced remotely if not found locally

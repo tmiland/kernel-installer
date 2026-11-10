@@ -60,7 +60,11 @@ SCRIPT_DIR=$(dirname "$self")
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
-LOGFILE=${LOGFILE:-/var/log/kernel_installer.log}
+# /var/log itself is group-writable on Ubuntu/Mint; the log lives in a
+# root-only subdirectory instead of next to entries the syslog group can
+# replace (#64).
+DEFAULT_LOGFILE=/var/log/kernel-installer/kernel_installer.log
+LOGFILE=${LOGFILE:-$DEFAULT_LOGFILE}
 # One installer at a time: two runs would share the build folder and log (#70)
 LOCK_FILE=${LOCK_FILE:-/run/kernel_installer.lock}
 # Default processing units (all available)
@@ -294,11 +298,57 @@ take_lock() {
   fi
 }
 
+# Validate the log path before root appends to it or renames it to .1. The
+# default lives in a 0700 root-owned directory; a custom LOGFILE must not be a
+# symlink, must not be a file owned by someone else, and must not sit in a
+# directory other users can write to (#64).
+chk_logfile() {
+  local log=${1:-$LOGFILE} dir mode
+  dir=$(dirname -- "$log")
+  if [ -L "$log" ]; then
+    fatal "Log file $log is a symlink; refusing to write through it."
+  fi
+  if [ -e "$log" ] && { [ ! -f "$log" ] || [ ! -O "$log" ]; }; then
+    fatal "Log file $log is not a regular file owned by the current user; refusing to use it."
+  fi
+  if [ -L "$log.1" ]; then
+    fatal "Previous log $log.1 is a symlink; refusing to rotate onto it."
+  fi
+  if [ -e "$log.1" ] && { [ ! -f "$log.1" ] || [ ! -O "$log.1" ]; }; then
+    fatal "Previous log $log.1 is not a regular file owned by the current user; refusing to replace it."
+  fi
+  if [ ! -d "$dir" ]; then
+    if [[ $log == "$DEFAULT_LOGFILE" ]]; then
+      if ! mkdir -p -m 0700 -- "$dir"; then
+        fatal "Could not create log directory $dir."
+      fi
+    else
+      fatal "Log directory $dir does not exist."
+    fi
+  fi
+  if [ -L "$dir" ]; then
+    fatal "Log directory $dir is a symlink; refusing to use it."
+  fi
+  mode=$(stat -c '%a' -- "$dir" 2>/dev/null) ||
+    fatal "Could not read the permissions of log directory $dir."
+  if (( (8#$mode & 0022) != 0 )); then
+    fatal "Log directory $dir is writable by group or others; use $DEFAULT_LOGFILE or a directory only root can write to."
+  fi
+  if [[ $log == "$DEFAULT_LOGFILE" ]]; then
+    if [ ! -O "$dir" ]; then
+      fatal "Log directory $dir is not owned by the current user."
+    fi
+    if (( (8#$mode & 0077) != 0 )); then
+      fatal "Log directory $dir must not be accessible by group or others; run: chmod 700 $dir"
+    fi
+  fi
+}
+
 # Start an install with an empty log and keep the previous one as
 # $LOGFILE.1, so a failed build's log survives the next run (#53).
 rotate_log() {
   if [ -f "$LOGFILE" ]; then
-    mv -f "$LOGFILE" "$LOGFILE.1"
+    mv -f -- "$LOGFILE" "$LOGFILE.1"
   fi
 }
 
@@ -953,6 +1003,7 @@ esac
 # prompt and its package installation, the dependency checks) assumes root,
 # and a run piped through a one-liner must not get that far as a regular user.
 chk_permissions
+chk_logfile "$LOGFILE"
 
 shopt -s nocasematch
 
