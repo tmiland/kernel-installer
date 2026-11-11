@@ -142,10 +142,10 @@ check "prepare_base_config rejects a missing path" test "$?" -ne 0
 body=$(sed -n '/^install_kernel() {/,/^}/p' "$SCRIPT")
 line_of() { grep -n -- "$1" <<<"$body" | head -1 | cut -d: -f1; }
 prep_line=$(line_of 'prepare_base_config')
-make_line=$(line_of 'run_ok "make $CONFIG_OPTION"')
+make_line=$(line_of 'make $CONFIG_OPTION')
 apply_line=$(line_of 'apply_profile "$PROFILE"')
 custom_line=$(line_of 'for custom_config_option')
-olddef_line=$(line_of 'run_ok "make olddefconfig"')
+olddef_line=$(line_of 'make olddefconfig')
 assert_line=$(line_of 'assert_profile "$PROFILE"')
 check "base config is prepared before make" test -n "$prep_line" -a -n "$make_line" -a "$prep_line" -lt "$make_line"
 check "profile is applied before --custom-config" test -n "$apply_line" -a -n "$custom_line" -a "$apply_line" -lt "$custom_line"

@@ -431,7 +431,10 @@ prepare_install_dir() {
   local dir=$INSTALL_DIR parent parent_uid caller_uid mode
   parent=$(dirname -- "$dir")
   if [ ! -d "$parent" ]; then
-    if ! mkdir -p -- "$parent"; then
+    # Create the parent private from the start. With the default root umask
+    # 002 a plain `mkdir -p` would create 0775, which the check below then
+    # rejects (the installer would create the directory and refuse it).
+    if ! mkdir -p -m 0700 -- "$parent"; then
       fatal "Could not create install directory parent $parent"
     fi
   fi
@@ -443,7 +446,7 @@ prepare_install_dir() {
   # A non-sticky group/other-writable parent lets another user rename or
   # replace the build folder; sticky shared folders (/tmp, /var/tmp) do not.
   if (( (8#$mode & 0022) != 0 && (8#$mode & 01000) == 0 )); then
-    fatal "Install directory parent $parent is writable by group or others and is not sticky; choose a directory only you (and root) can write to."
+    fatal "Install directory parent $parent is writable by group or others and is not sticky; run: chmod 700 $parent (or choose a private --dir)"
   fi
   parent_uid=$(stat -c '%u' -- "$parent" 2>/dev/null) ||
     fatal "Could not read the owner of $parent."
@@ -1707,7 +1710,7 @@ fi
 
 if [ "$LTO" != "none" ]; then
   # LTO needs clang/LLD; install them only when requested.
-  INSTALL_PKGS="$INSTALL_PKGS clang lld llvm"
+  INSTALL_PKGS+=" clang lld llvm"
 fi
 
 case "$DEFAULT_COMPRESSION" in
