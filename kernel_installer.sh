@@ -63,6 +63,24 @@ KERNEL_KEYRING_FILE=src/keys/kernel.org.asc
 TORVALDS_FPR=ABAF11C65A2970B130ABE3C479BE3E4300411886
 GREGKH_FPR=647F28654894E3BD457199BE38DBBDC86092693E
 AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
+# CachyOS source + BORE pins. The source tree already carries the CachyOS
+# base patchset (CONFIG_CACHY); the BORE scheduler is an additional patch.
+# Bump these together with src/keys/cachyos.asc when moving to a new source.
+CACHYOS_VERSION=7.3.4
+CACHYOS_TAGREL=1
+CACHYOS_SRCNAME="cachyos-${CACHYOS_VERSION}-${CACHYOS_TAGREL}"
+CACHYOS_SOURCE_URL="https://github.com/CachyOS/linux/releases/download/${CACHYOS_SRCNAME}/${CACHYOS_SRCNAME}.tar.gz"
+CACHYOS_PKGBUILD_REV=8e308d0a3895dbc741381fb61b9a9a8603be793d
+CACHYOS_CONFIG_URL="https://raw.githubusercontent.com/CachyOS/linux-cachyos/${CACHYOS_PKGBUILD_REV}/linux-cachyos/config"
+CACHYOS_CONFIG_SHA256=81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92951927
+CACHYOS_PATCHES_REV=21d721415790e6717b2ece16e82e08eb98d16c00
+CACHYOS_BORE_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-bore-cachy.patch"
+CACHYOS_BORE_PATCH_SHA256=d2eaa8e8dbf1f56bfb304f8b437a7dc30a65408f90a93701367baf8adc2173b4
+CACHYOS_KEYRING_FILE=src/keys/cachyos.asc
+CACHYOS_KEY_FINGERPRINTS=(
+  E18447AC260021D31F3FF6C4C8A2A4774B8B63C4
+  E8B9AA39F054E30E8290D492C3C4820857F654FE
+)
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
@@ -138,6 +156,10 @@ SLIB_SHA256="694784527d354eb264df24e399a693124fe0df6cb5037a7af218677772cf47c5"
 SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/$SLIB_REV/src/slib.sh
 # Set default configuration target
 CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
+# Kernel source: vanilla (kernel.org) or cachyos (pinned CachyOS source)
+SOURCE=${SOURCE:-vanilla}
+# Scheduler selection for the CachyOS source: eevdf or bore
+KERNEL_SCHED=${KERNEL_SCHED:-eevdf}
 
 # Include functions
 # Only trust src/slib.sh next to the script when the script itself is a file.
@@ -231,7 +253,7 @@ log_diagnostics() {
   done
   log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
   log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
-  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
   log_debug "Diagnostics: running kernel's config: $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none")"
   log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
   log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
@@ -896,6 +918,21 @@ prepare_base_config() {
   [ -n "$BASE_CONFIG" ] || return 0
   case "$BASE_CONFIG" in
     none) return 0 ;;
+    cachyos)
+      if [ "$SOURCE" != "cachyos" ]; then
+        fatal "--base-config cachyos requires --source cachyos"
+        return 1
+      fi
+      if ! curl -fsSL --retry 3 -o .config "$CACHYOS_CONFIG_URL"; then
+        fatal "Could not download the pinned CachyOS config"
+        return 1
+      fi
+      if ! printf '%s  %s\n' "$CACHYOS_CONFIG_SHA256" ".config" | sha256sum -c - >/dev/null 2>&1; then
+        fatal "CachyOS config checksum mismatch (expected ${CACHYOS_CONFIG_SHA256})"
+        return 1
+      fi
+      log_info "Using pinned CachyOS kernel config"
+      ;;
     running)
       local src
       src="/boot/config-$(uname -r)"
@@ -1177,6 +1214,8 @@ update_updater () {
           LOWLATENCY="$LOWLATENCY" \
           PROFILE="$PROFILE" \
           BASE_CONFIG="$BASE_CONFIG" \
+          SOURCE="$SOURCE" \
+          KERNEL_SCHED="$KERNEL_SCHED" \
           BANNERS="$BANNERS" \
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
@@ -1207,7 +1246,9 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--custom-config        |-cc${NORMAL}  set custom configuration directive, can be used multiple times"
   printf "%s\\n" "  ${YELLOW}--profile              |-p${NORMAL}   optimization profile (see --list-profiles)"
   printf "%s\\n" "  ${YELLOW}--list-profiles        |-lp${NORMAL}  list optimization profiles and exit"
-  printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, or none"
+  printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, cachyos, or none"
+  printf "%s\\n" "  ${YELLOW}--source               |${NORMAL}      kernel source: vanilla (kernel.org) or cachyos (pinned)"
+  printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -1300,15 +1341,31 @@ while [[ $# -gt 0 ]]; do
       ;;
     --base-config | -bc)
       require_arg "$1" "${2:-}"
-      if [ "$2" != "running" ] && [ "$2" != "none" ] && [ ! -f "$2" ]; then
+      if [ "$2" != "running" ] && [ "$2" != "none" ] && [ "$2" != "cachyos" ] && [ ! -f "$2" ]; then
         fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Base config not found: $2"
       fi
-      if [ "$2" = "running" ] || [ "$2" = "none" ]; then
+      if [ "$2" = "running" ] || [ "$2" = "none" ] || [ "$2" = "cachyos" ]; then
         BASE_CONFIG="$2"
       else
         # Resolve now, before install_kernel cd's into the kernel tree.
         BASE_CONFIG="$(realpath -m -- "$2")"
       fi
+      shift 2
+      ;;
+    --source)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        vanilla | cachyos) SOURCE="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown kernel source: $2 (vanilla or cachyos)" ;;
+      esac
+      shift 2
+      ;;
+    --sched)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        eevdf | bore) KERNEL_SCHED="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown scheduler: $2 (eevdf or bore)" ;;
+      esac
       shift 2
       ;;
     --kexec | -x)
@@ -1369,6 +1426,23 @@ if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
   set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 fi
 
+if [ "$KERNEL_SCHED" = "bore" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched bore requires --source cachyos"
+fi
+
+if [ "$SOURCE" = "cachyos" ]; then
+  if [ "$VER_SELECTED" = "1" ] && [ "$LINUX_VER" != "$CACHYOS_VERSION" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --source cachyos is pinned to ${CACHYOS_VERSION}; remove the version option or use ${CACHYOS_VERSION}"
+  fi
+  LINUX_VER="$CACHYOS_VERSION"
+  LINUX_VER_NAME="CachyOS"
+  VER_SELECTED=1
+fi
+
+if [ "$BASE_CONFIG" = "cachyos" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --base-config cachyos requires --source cachyos"
+fi
+
 # --lowlatency is kept as an alias for --profile lowlatency. Refuse the
 # combination instead of guessing which one should win.
 if [ "$LOWLATENCY" = "1" ]; then
@@ -1379,11 +1453,16 @@ if [ "$LOWLATENCY" = "1" ]; then
   LOWLATENCY=0
 fi
 
-# Profiles are deltas on a real hardware config. Default to the running
-# kernel's config so the resulting kernel keeps the machine's drivers; use
-# --base-config none for the historical arch-defconfig behavior.
-if [ -n "$PROFILE" ] && [ -z "$BASE_CONFIG" ]; then
-  BASE_CONFIG=running
+# Profiles are deltas on a real hardware config. CachyOS source builds use
+# the pinned CachyOS config by default; vanilla profiles use the running
+# kernel's config. --base-config none keeps the historical arch-defconfig
+# behavior.
+if [ -z "$BASE_CONFIG" ]; then
+  if [ "$SOURCE" = "cachyos" ]; then
+    BASE_CONFIG=cachyos
+  elif [ -n "$PROFILE" ]; then
+    BASE_CONFIG=running
+  fi
 fi
 
 # Custom directives must invoke scripts/config; anything else (e.g. a raw
@@ -1549,7 +1628,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod patch build-essential libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1572,7 +1651,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # boot entry at install time. gawk: see the Debian list above.
     # elfutils-devel provides libdw, required by the kernel.spec
     # BuildRequires check on newer mainline kernels.
-    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
+    INSTALL_PKGS="wget curl git rsync patch ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
@@ -1972,6 +2051,109 @@ kexec_new_kernel() {
   return 0
 }
 
+# Download and verify the pinned CachyOS source tarball. The CachyOS release
+# is signed by Peter Jung or Eric Naim; checkout runs use the bundled public
+# keys, piped runs fetch the same pinned fingerprints from keys.openpgp.org.
+get_verified_cachyos_tarball() {
+  local tar="linux-${LINUX_VER}.tar.gz"
+  local asc="${tar}.asc"
+  local gpg_root home valid fpr ok=0 status
+  local gpg_bin
+  gpg_bin=$(command -v gpg || command -v gpg2 || true)
+  if [ -z "$gpg_bin" ]; then
+    log_debug "Installing gnupg for CachyOS source verification"
+    # shellcheck disable=SC2086
+    ${INSTALL} gnupg >/dev/null 2>&1 || { verify_fail "Failed to install gnupg"; return 1; }
+    gpg_bin=$(command -v gpg || command -v gpg2 || true)
+  fi
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$tar" "$CACHYOS_SOURCE_URL" 2>/dev/null ||
+    { verify_fail "Failed to download the CachyOS source tarball"; return 1; }
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$asc" "${CACHYOS_SOURCE_URL}.asc" 2>/dev/null ||
+    { verify_fail "Failed to download the CachyOS source signature"; return 1; }
+
+  gpg_root=$(mktemp -d "${GPG_TMPDIR:-/tmp}/cachyos-gpg.XXXXXXXX") ||
+    { verify_fail "Could not create a temporary GnuPG directory"; return 1; }
+  home="${gpg_root}/home"
+  mkdir -m 0700 "$home" || { rm -rf "$gpg_root"; verify_fail "Could not create a GnuPG home"; return 1; }
+
+  if [ -n "${self:-}" ] && [ -f "${SCRIPT_DIR}/${CACHYOS_KEYRING_FILE}" ]; then
+    if ! "$gpg_bin" --batch --homedir "$home" --import "${SCRIPT_DIR}/${CACHYOS_KEYRING_FILE}" >/dev/null 2>&1; then
+      rm -rf "$gpg_root"
+      verify_fail "Could not import the bundled CachyOS signing keys"
+      return 1
+    fi
+  else
+    for fpr in "${CACHYOS_KEY_FINGERPRINTS[@]}"; do
+      # shellcheck disable=SC2086
+      if ! ${CURLBIN:-curl} -fsSL --retry 3 -o "${gpg_root}/${fpr}.asc" \
+        "https://keys.openpgp.org/vks/v1/by-fingerprint/${fpr}" 2>/dev/null ||
+        ! "$gpg_bin" --batch --homedir "$home" --import "${gpg_root}/${fpr}.asc" >/dev/null 2>&1; then
+        rm -rf "$gpg_root"
+        verify_fail "Could not fetch/import CachyOS key ${fpr}"
+        return 1
+      fi
+    done
+  fi
+
+  if ! status=$("$gpg_bin" --batch --homedir "$home" --status-fd 1 \
+    --verify "$asc" "$tar" 2>/dev/null); then
+    rm -rf "$gpg_root"
+    verify_fail "CachyOS source signature verification failed"
+    return 1
+  fi
+  valid=$(printf '%s\n' "$status" | awk '/^\[GNUPG:\] VALIDSIG/{print $3; exit}')
+  for fpr in "${CACHYOS_KEY_FINGERPRINTS[@]}"; do
+    [ "$valid" = "$fpr" ] && ok=1
+  done
+  rm -rf "$gpg_root"
+  if [ "$ok" -ne 1 ]; then
+    verify_fail "CachyOS source is signed by an unexpected key: ${valid:-unknown}"
+    return 1
+  fi
+  TARGET="${PWD}/${tar}"
+  log_debug "Verified CachyOS source with key ${valid}"
+  return 0
+}
+
+apply_cachyos_bore_patch() {
+  [ "$SOURCE" = "cachyos" ] && [ "$KERNEL_SCHED" = "bore" ] || return 0
+  local patch="cachyos-bore.patch"
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$CACHYOS_BORE_PATCH_URL" 2>/dev/null ||
+    fatal "Could not download the BORE scheduler patch"
+  if ! printf '%s  %s\n' "$CACHYOS_BORE_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+    fatal "BORE scheduler patch checksum mismatch (expected ${CACHYOS_BORE_PATCH_SHA256})"
+  fi
+  if ! ( cd "linux-${LINUX_VER}" && patch -p1 < "../${patch}" >/dev/null ); then
+    fatal "BORE scheduler patch failed to apply to the CachyOS source"
+  fi
+  log_success "BORE scheduler patch applied"
+  return 0
+}
+
+configure_cachyos_source() {
+  [ "$SOURCE" = "cachyos" ] || return 0
+  scripts/config --enable CACHY
+  if [ "$KERNEL_SCHED" = "bore" ]; then
+    scripts/config --enable SCHED_BORE
+  else
+    scripts/config --disable SCHED_BORE
+  fi
+}
+
+assert_cachyos_source() {
+  [ "$SOURCE" = "cachyos" ] || return 0
+  local got
+  got=$(scripts/config --state CACHY)
+  [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_CACHY is '${got}', expected 'y'"
+  if [ "$KERNEL_SCHED" = "bore" ]; then
+    got=$(scripts/config --state SCHED_BORE)
+    [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_SCHED_BORE is '${got}', expected 'y'"
+  fi
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -2030,7 +2212,14 @@ install_kernel() {
   if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
-    if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
+    if [ "$SOURCE" = "cachyos" ]; then
+      # CachyOS source is signed by its release keys, not kernel.org.
+      if ! RUN_ERRORS_FATAL='' run_ok "get_verified_cachyos_tarball" "Downloading and Verifying CachyOS source tarball..."; then
+        fatal "Failed to download and verify the CachyOS source tarball: ${VERIFY_ERROR:-see the log for details}"
+      fi
+      log_success "Downloaded and verified ${TARGET}"
+      file_ext=gz
+    elif [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
       # get-verified-tarball function; handle a failure here (not in run_ok)
       # so the reason is shown on screen
       if ! RUN_ERRORS_FATAL='' run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
@@ -2067,6 +2256,12 @@ install_kernel() {
     # No -v: the file listing (~90,000 lines) used to bury the build output in the log
     run_ok "tar xf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..."
     log_success "Unpacking finished"
+    if [ "$SOURCE" = "cachyos" ]; then
+      if [ -d "$CACHYOS_SRCNAME" ]; then
+        mv "$CACHYOS_SRCNAME" "linux-${LINUX_VER}" || fatal "Could not rename the CachyOS source tree"
+      fi
+      [ -d "linux-${LINUX_VER}" ] || fatal "CachyOS source did not unpack as linux-${LINUX_VER}"
+    fi
     #)
   fi
   if [ -d "$INSTALL_DIR"/linux-"${LINUX_VER}" ]; then
@@ -2079,6 +2274,9 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
       prepare_base_config
       log_debug "Configuring..."
+      if [ "$SOURCE" = "cachyos" ]; then
+        apply_cachyos_bore_patch
+      fi
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
         if ! make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
@@ -2114,6 +2312,9 @@ install_kernel() {
         scripts/config --enable CONFIG_ZRAM_BACKEND_842
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
+      if [ "$SOURCE" = "cachyos" ]; then
+        configure_cachyos_source
+      fi
       if [ -n "$PROFILE" ]; then
         log_info "Applying optimization profile: ${PROFILE}"
         apply_profile "$PROFILE"
@@ -2127,6 +2328,9 @@ install_kernel() {
       run_ok "make olddefconfig" "Finalizing configuration..."
       if [ -n "$PROFILE" ]; then
         assert_profile "$PROFILE"
+      fi
+      if [ "$SOURCE" = "cachyos" ]; then
+        assert_cachyos_source
       fi
       echo
       # Compilation

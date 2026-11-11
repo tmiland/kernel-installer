@@ -16,9 +16,9 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
+wget curl git rsync fakeroot cpio kmod patch build-essential libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
 # Fedora/RHEL
-wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
+wget curl git rsync patch ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby
 ```
 `gnupg` is also installed on demand when tarball verification needs `gpg`/`gpgv`, and `kexec-tools` when `--kexec` is used.
 
@@ -259,6 +259,38 @@ Notes:
   default debug-info-off build), O3 (not exposed by vanilla 7.3.4; CachyOS
   carries an out-of-tree O3 option), LTO, and native CPU tuning. These are
   separate follow-ups.
+
+### CachyOS source and BORE
+
+The CachyOS source tree carries the CachyOS base patchset (`CONFIG_CACHY`).
+It is pinned to **7.3.4-1** and verified with the CachyOS release keys; the
+config and BORE patch are pinned by commit and SHA256.
+
+```bash
+./kernel_installer.sh --source cachyos --profile workstation
+./kernel_installer.sh --source cachyos --sched bore --profile workstation
+```
+
+- `--source cachyos` builds the pinned CachyOS source instead of kernel.org.
+  It uses the pinned CachyOS config by default, so `--base-config cachyos` is
+  implied; `--base-config running`, a path, or `none` still override it.
+  Version options (`--stable`, `--mainline`, `--longterm`, `--kernel`) are only
+  accepted if they match the pinned 7.3.4 source.
+- `--sched bore` applies the pinned BORE scheduler patch and enables
+  `CONFIG_SCHED_BORE=y` plus `CONFIG_CACHY=y`. It requires
+  `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
+  kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
+  the BORE patch.
+- CI builds and boots the BORE kernel on Debian 13 and Ubuntu 24.04, with the
+  `workstation` profile.
+- Checkout runs verify the CachyOS source with `src/keys/cachyos.asc`; piped
+  runs fetch the same pinned fingerprints from keys.openpgp.org.
+- The CachyOS pins live in `kernel_installer.sh` (`CACHYOS_*`). Update the
+  source tag, PKGBUILD revision, config SHA256, patch revision and patch
+  SHA256 together; a mismatch fails closed.
+- This is the CachyOS base patchset plus BORE, not the full CachyOS variant
+  matrix. BMQ, sched_ext, LTO, native CPU tuning, and the remaining wiki
+  features are separate follow-ups.
 
 ### Custom configuration directives
 

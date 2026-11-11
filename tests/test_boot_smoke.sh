@@ -39,8 +39,16 @@ EOF
 # needs the script to proceed without root.
 cat > "$work/bin/mknod" <<'EOF'
 #!/usr/bin/env bash
-for last; do :; done
-touch "$last"
+path=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m) shift 2 ;;
+    c | b) break ;;
+    *) path=$1; shift ;;
+  esac
+done
+[ -n "$path" ] || exit 1
+touch "$path"
 EOF
 # The test does not inspect the archive; the fake QEMU ignores it.
 cat > "$work/bin/cpio" <<'EOF'

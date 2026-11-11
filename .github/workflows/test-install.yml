@@ -379,6 +379,62 @@ jobs:
           path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore
 
+  cachyos-bore-smoke:
+    name: CachyOS BORE ${{ matrix.name }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13 (trixie)
+            image: debian:13
+            slug: debian-13
+          - name: Ubuntu 24.04 (noble)
+            image: ubuntu:24.04
+            slug: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+    env:
+      TERM: xterm
+    steps:
+      - name: Install container prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
+      - uses: actions/checkout@v4
+      - name: Build and install CachyOS BORE kernel
+        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 200 lines) ==="
+          tail -n 200 /var/log/kernel-installer/kernel_installer.log || true
+      - name: Verify CachyOS BORE and workstation config
+        run: |
+          set -eux
+          ver=7.3.4
+          cfg="/boot/config-${ver}"
+          test -f "$cfg"
+          grep -q '^CONFIG_CACHY=y$' "$cfg"
+          grep -q '^CONFIG_SCHED_BORE=y$' "$cfg"
+          grep -q '^CONFIG_HZ=1000$' "$cfg"
+          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
+          grep -q '^CONFIG_LRU_GEN=y$' "$cfg"
+          grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
+          grep -q '^CONFIG_CFS_BANDWIDTH=y$' "$cfg"
+          echo "CachyOS BORE + workstation config verified in $cfg"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-cachyos-bore-${{ matrix.slug }}
+          path: /var/log/kernel-installer/kernel_installer.log
+          if-no-files-found: ignore
+
   # Issue #43: every other job here passes -k, --mainline or --custom-config,
   # so none of them installs the way a user does -- and a Fedora install of a
   # *current* kernel broke with no job noticing. These jobs run
