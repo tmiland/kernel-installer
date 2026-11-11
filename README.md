@@ -7,9 +7,22 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 [![licence](https://img.shields.io/github/license/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
 ![Bash](https://img.shields.io/badge/Language-SH-4EAA25.svg?style=for-the-badge)
 
-### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions and the Fedora/RHEL family.
+### Build and install optimized Linux kernels on Debian, Ubuntu, Fedora and RHEL
+
+Use-case profiles, CachyOS source + BORE, Clang LTO, CPU tuning, named kernels, and QEMU boot verification.
 
 [![kernel-installer Image](https://raw.githubusercontent.com/tmiland/kernel-installer/main/_images/kernel_installer.png)](https://github.com/tmiland/kernel-installer/blob/main/_images/kernel_installer.png)
+
+### Highlights
+
+- **Use-case profiles** — `--profile desktop|workstation|gaming|server|laptop` applies HZ/preempt/MGLRU/BBR/cgroup settings for the workload.
+- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.4-1 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
+- **CPU tuning** — `--cpu generic|native|zen4|x86-64-v3|x86-64-v4`. `native` needs compiler support; with CachyOS’s Rust config it also needs a rustc with APXF support, otherwise use `x86-64-v3`/`zen4`.
+- **Clang LTO** — `--lto thin|full` with `clang`/`lld`.
+- **Named kernels** — automatic localversion (`7.3.4-cachyos-workstation-bore`) and `--kernel-tag`.
+- **Boot verification** — QEMU boot smoke test in CI for every distro target.
+
+See [Optimization profiles](#optimization-profiles), [CachyOS source and BORE](#cachyos-source-and-bore), and [Kernel naming](#kernel-naming).
 
 ### Dependencies
 
