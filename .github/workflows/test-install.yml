@@ -132,11 +132,11 @@ jobs:
         run: |
           mkdir -p "${TMPDIR:?}"
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng
+            dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Show environment
@@ -188,6 +188,8 @@ jobs:
             grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh --version "${KERNEL_VERSION}"
       - name: Uninstall kernel ${{ env.KERNEL_VERSION }}
         run: |
           set -ux
@@ -249,11 +251,11 @@ jobs:
       - name: Install container prerequisites
         run: |
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng
+            dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Build and install mainline kernel ${{ env.MAINLINE_VER }}
@@ -290,6 +292,8 @@ jobs:
           test -f "/boot/config-${ver}"
           test -d "/lib/modules/${ver}/kernel"
           echo "Mainline kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -313,7 +317,7 @@ jobs:
         run: |
           apt-get update -qq
           # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
       - uses: actions/checkout@v4
       - name: Reject malformed --custom-config values and unknown profiles
         run: |
@@ -365,6 +369,8 @@ jobs:
           grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' "$cfg"
           grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y$' "$cfg"
           echo "Profile and custom config verified in $cfg"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -412,11 +418,11 @@ jobs:
           # neither curl nor wget, which made the run fail as a bogus "check
           # your network connection" error.
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng curl
+            dnf install -y git ca-certificates procps-ng curl qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools curl
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools curl qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Show environment
@@ -480,6 +486,8 @@ jobs:
           test -f "/boot/config-${ver}"
           test -d "/lib/modules/${ver}/kernel"
           echo "Current stable kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4

@@ -274,6 +274,21 @@ Note that `--custom-config` can be used multiple times like:
 ./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m" --custom-config "scripts/config --set-val CONFIG_KERNEL_ZSTD y"
 ```
 
+### Boot smoke test
+
+`scripts/boot-smoke.sh` boots the installed kernel in QEMU with a minimal
+initramfs and requires a `BOOT_SMOKE_OK` marker on the serial console. CI runs
+it after installation in every distro install job, including the profile
+smoke job. It proves that the built kernel image boots; it is not a full-OS
+boot or a performance benchmark.
+
+```bash
+./scripts/boot-smoke.sh --version "$(uname -r)"
+```
+
+Requires QEMU, a static C compiler, `cpio`, and `mknod` as root (or run it
+under `fakeroot`). Use `--timeout` to change the 180-second limit.
+
 ### Tarball verification
 
 Stable, longterm and `--kernel` tarballs are cryptographically verified by default

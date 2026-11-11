@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint shell scripts
-        run: shellcheck kernel_installer.sh src/slib.sh scripts/update-slib.sh
+        run: shellcheck kernel_installer.sh src/slib.sh scripts/update-slib.sh scripts/boot-smoke.sh
 
   slib-pin:
     name: slib pin
