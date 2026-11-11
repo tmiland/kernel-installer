@@ -482,6 +482,4 @@ git add kernel_installer.sh && git commit -m 'chore: bump slib pin' && git push
 
 ### License
 
-[![MIT License Image](https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/MIT_logo.svg/220px-MIT_logo.svg.png)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
-
 [MIT License](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
