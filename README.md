@@ -307,8 +307,10 @@ sudo ./kernel_installer.sh -d /path/to/parent \
   `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
   kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
   the BORE patch.
-- CI builds and boots the BORE kernel with Clang ThinLTO and native CPU
-  tuning on Debian 13 and Ubuntu 24.04, with the `workstation` profile.
+- CI builds and boots the BORE kernel with Clang ThinLTO on Debian 13 and
+  Ubuntu 24.04, with the `workstation` profile. Native CPU tuning is available
+  but is not part of the default CI matrix because it depends on the build
+  host's toolchain.
 - Checkout runs verify the CachyOS source with `src/keys/cachyos.asc`; piped
   runs fetch the same pinned fingerprints from keys.openpgp.org.
 - The CachyOS pins live in `kernel_installer.sh` (`CACHYOS_*`). Update the
