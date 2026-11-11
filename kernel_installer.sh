@@ -1628,7 +1628,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod patch build-essential libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1651,7 +1651,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # boot entry at install time. gawk: see the Debian list above.
     # elfutils-devel provides libdw, required by the kernel.spec
     # BuildRequires check on newer mainline kernels.
-    INSTALL_PKGS="wget curl git rsync patch ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby"
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make patch openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
@@ -2126,7 +2126,7 @@ apply_cachyos_bore_patch() {
   if ! printf '%s  %s\n' "$CACHYOS_BORE_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
     fatal "BORE scheduler patch checksum mismatch (expected ${CACHYOS_BORE_PATCH_SHA256})"
   fi
-  if ! ( cd "linux-${LINUX_VER}" && patch -p1 < "../${patch}" >/dev/null ); then
+  if ! patch -p1 < "$patch" >/dev/null; then
     fatal "BORE scheduler patch failed to apply to the CachyOS source"
   fi
   log_success "BORE scheduler patch applied"
