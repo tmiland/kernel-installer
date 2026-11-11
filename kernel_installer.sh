@@ -554,8 +554,21 @@ installed_kernel_pkg() {
 # yet, no Makefile).
 built_kernelrelease() {
   local release
-  # shellcheck disable=SC2086
-  release=$(cd "$1" 2>/dev/null && ${MAKE_LLVM:+$MAKE_LLVM }make -s kernelrelease 2>/dev/null) || return 1
+  # kernelrelease is a no-sync-config target: it runs scripts/setlocalversion,
+  # which reads include/config/auto.conf but never refreshes it from .config.
+  # The profile and --kernel-tag edits happen after the last syncconfig, so a
+  # stale or missing auto.conf answers without the localversion (7.3.4 instead
+  # of 7.3.4-cachyos-workstation-bore-lto) or fails outright. Force a resync
+  # first; the tree then names exactly the release mkdebian and kernel.spec
+  # used for the packages (#74).
+  release=$(
+    cd "$1" 2>/dev/null || exit 1
+    touch .config 2>/dev/null || exit 1
+    # shellcheck disable=SC2086
+    ${MAKE_LLVM:+$MAKE_LLVM }make -s syncconfig >/dev/null 2>&1 || exit 1
+    # shellcheck disable=SC2086
+    ${MAKE_LLVM:+$MAKE_LLVM }make -s kernelrelease 2>/dev/null
+  ) || return 1
   [[ -n $release ]] || return 1
   printf '%s\n' "$release"
 }
@@ -2602,6 +2615,7 @@ install_kernel() {
     LINUX_FULL_VER=$BUILT_KERNELRELEASE
   else
     LINUX_FULL_VER=$(kernel_release "$LINUX_FULL_VER")
+    log_warning "Could not read the kernel release from the configured tree; using ${LINUX_FULL_VER}. The built packages may be named differently."
   fi
   log_info "Kernel release: ${LINUX_FULL_VER}"
   # Install

@@ -37,6 +37,9 @@ touch "$work/tree/Makefile"
 cat > "$work/bin/make" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s %s\n' "$PWD" "$*" >> "$MAKE_LOG"
+case "$*" in
+  *syncconfig) exit "${FAKE_SYNCCONFIG_RC:-0}" ;;
+esac
 printf '%s\n' "${FAKE_KERNELRELEASE-6.12.113-test}"
 SHIM
 chmod +x "$work/bin/make"
@@ -46,15 +49,27 @@ export FAKE_KERNELRELEASE=6.12.113-test
 
 check "built_kernelrelease returns the tree release (localversion included)" \
   test "$(built_kernelrelease "$work/tree")" = 6.12.113-test
+check "built_kernelrelease syncs auto.conf before asking the tree" \
+  grep -qF "$work/tree -s syncconfig" "$MAKE_LOG"
 check "built_kernelrelease runs 'make -s kernelrelease' inside the tree" \
   grep -qF "$work/tree -s kernelrelease" "$MAKE_LOG"
+# kernelrelease reads include/config/auto.conf and never refreshes it, so a
+# stale auto.conf must be resynced from .config before the answer is trusted.
+check "syncconfig runs before kernelrelease" \
+  test "$(grep -nF "$work/tree -s syncconfig" "$MAKE_LOG" | cut -d: -f1)" \
+    -lt "$(grep -nF "$work/tree -s kernelrelease" "$MAKE_LOG" | cut -d: -f1)"
 
 export FAKE_KERNELRELEASE=""
 check "built_kernelrelease reports failure when the tree answers nothing" \
   not built_kernelrelease "$work/tree"
+export FAKE_KERNELRELEASE=6.12.113-test
+export FAKE_SYNCCONFIG_RC=1
+check "built_kernelrelease reports failure when the resync fails" \
+  not built_kernelrelease "$work/tree"
+unset FAKE_KERNELRELEASE FAKE_SYNCCONFIG_RC
 check "built_kernelrelease reports failure for a missing tree" \
   not built_kernelrelease "$work/no-such-tree"
-unset FAKE_KERNELRELEASE MAKE_LOG
+unset MAKE_LOG
 
 # --- get_linux_full_ver: Makefile fallback, without the localversion ------
 cat > "$work/Makefile.plain" <<'EOF'
