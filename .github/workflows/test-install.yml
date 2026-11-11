@@ -351,9 +351,12 @@ jobs:
       - name: Verify profile and custom config applied
         run: |
           set -eux
-          ver="${KERNEL_VERSION}"
-          cfg="/boot/config-${ver}"
-          dpkg -s "linux-image-${ver}" >/dev/null
+          set -- /boot/vmlinuz-*
+          test "$#" -eq 1
+          release="${1##*/vmlinuz-}"
+          test "$release" = "${KERNEL_VERSION}-vanilla-workstation"
+          cfg="/boot/config-${release}"
+          dpkg -s "linux-image-${release}" >/dev/null
           test -f "$cfg"
           grep -q '^CONFIG_DEFAULT_HOSTNAME="cc-smoke"$' "$cfg"
           grep -q '^CONFIG_PANIC_TIMEOUT=42$' "$cfg"
@@ -414,8 +417,11 @@ jobs:
       - name: Verify CachyOS BORE and workstation config
         run: |
           set -eux
-          ver=7.3.4
-          cfg="/boot/config-${ver}"
+          set -- /boot/vmlinuz-*
+          test "$#" -eq 1
+          release="${1##*/vmlinuz-}"
+          test "$release" = "7.3.4-cachyos-workstation-bore-native-lto"
+          cfg="/boot/config-${release}"
           test -f "$cfg"
           grep -q '^CONFIG_CACHY=y$' "$cfg"
           grep -q '^CONFIG_SCHED_BORE=y$' "$cfg"

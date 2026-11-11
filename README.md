@@ -301,6 +301,31 @@ config and BORE patch are pinned by commit and SHA256.
   matrix. BMQ, sched_ext, and the remaining wiki features are separate
   follow-ups.
 
+### Kernel naming
+
+Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
+`uname -r`, `/lib/modules`, the headers package, DKMS, initramfs, GRUB and the
+`.deb` names:
+
+```text
+<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>]
+```
+
+| Build | `uname -r` |
+|---|---|
+| CachyOS BORE workstation, generic CPU, no LTO | `7.3.4-cachyos-workstation-bore` |
+| same + native CPU | `7.3.4-cachyos-workstation-bore-native` |
+| same + native + ThinLTO | `7.3.4-cachyos-workstation-bore-native-lto` |
+| CachyOS EEVDF server | `7.3.4-cachyos-server` |
+| vanilla desktop | `7.3.4-vanilla-desktop` |
+
+`--kernel-tag <suffix>` overrides the generated suffix. The default vanilla
+build without a profile stays untagged. `CONFIG_LOCALVERSION_AUTO` is disabled
+for named builds. A new localversion is a new kernel release, so DKMS modules
+must be rebuilt for it; the installer warns when `dkms status -k <release>`
+finds no modules. Use the full release for removal, e.g.
+`--uninstall -k "$(uname -r)"` (the default without `-k`).
+
 ### Custom configuration directives
 
 In order to enable specific kernel configs, one can use `--custom-config` like the following example:

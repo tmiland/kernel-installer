@@ -165,6 +165,8 @@ CPU=${CPU:-generic}
 # Link-time optimization: none, thin, or full (requires clang/lld)
 LTO=${LTO:-none}
 MAKE_LLVM=${MAKE_LLVM:-}
+# Optional custom localversion suffix (without or with a leading hyphen)
+KERNEL_TAG=${KERNEL_TAG:-}
 
 # Include functions
 # Only trust src/slib.sh next to the script when the script itself is a file.
@@ -258,7 +260,7 @@ log_diagnostics() {
   done
   log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
   log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
-  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, cpu: ${CPU}, lto: ${LTO}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, cpu: ${CPU}, lto: ${LTO}, tag: ${KERNEL_TAG:-auto}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
   log_debug "Diagnostics: running kernel's config: $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none")"
   log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
   log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
@@ -835,6 +837,24 @@ profile_is_valid() {
   esac
 }
 
+build_kernel_tag() {
+  [ -n "$KERNEL_TAG" ] && return 0
+  local tag=""
+  if [ "$SOURCE" = "cachyos" ]; then
+    tag="-cachyos"
+  elif [ -n "$PROFILE" ]; then
+    tag="-vanilla"
+  fi
+  [ -n "$PROFILE" ] && tag+="-$PROFILE"
+  [ "$KERNEL_SCHED" != "eevdf" ] && tag+="-$KERNEL_SCHED"
+  [ "$CPU" != "generic" ] && tag+="-$CPU"
+  case "$LTO" in
+    thin) tag+="-lto" ;;
+    full) tag+="-ltofull" ;;
+  esac
+  KERNEL_TAG="$tag"
+}
+
 apply_profile() {
   case "$1" in
     desktop) profile_desktop ;;
@@ -1227,6 +1247,7 @@ update_updater () {
           KERNEL_SCHED="$KERNEL_SCHED" \
           CPU="$CPU" \
           LTO="$LTO" \
+          KERNEL_TAG="$KERNEL_TAG" \
           BANNERS="$BANNERS" \
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
@@ -1262,6 +1283,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
   printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
   printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
+  printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -1397,6 +1419,11 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
+    --kernel-tag)
+      require_arg "$1" "${2:-}"
+      KERNEL_TAG="$2"
+      shift 2
+      ;;
     --kexec | -x)
       shift
       KEXEC=1
@@ -1472,6 +1499,24 @@ if [ "$BASE_CONFIG" = "cachyos" ] && [ "$SOURCE" != "cachyos" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --base-config cachyos requires --source cachyos"
 fi
 
+if [ -n "$KERNEL_TAG" ]; then
+  KERNEL_TAG=${KERNEL_TAG#-}
+  case "$KERNEL_TAG" in
+    '' | *[!a-z0-9+.-]*)
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --kernel-tag must use lowercase letters, digits, '+', '.', or '-'"
+      ;;
+  esac
+  KERNEL_TAG="-${KERNEL_TAG}"
+fi
+
+# --uninstall without -k targets the running kernel, which may have a
+# localversion suffix.
+if [ "$mode" = "uninstall" ] && [ "$VER_SELECTED" = "0" ]; then
+  LINUX_VER=$(uname -r)
+  LINUX_VER_NAME="Running"
+  VER_SELECTED=1
+fi
+
 case "$CPU" in
   zen4 | x86-64-v3 | x86-64-v4)
     [ "$SOURCE" = "cachyos" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --cpu $CPU requires --source cachyos"
@@ -1505,6 +1550,8 @@ if [ -z "$BASE_CONFIG" ]; then
     BASE_CONFIG=running
   fi
 fi
+
+build_kernel_tag
 
 # Custom directives must invoke scripts/config; anything else (e.g. a raw
 # CONFIG_X=y assignment) would be silently ignored by eval
@@ -2256,6 +2303,34 @@ assert_cpu() {
   esac
 }
 
+check_dkms_release() {
+  local release=$1 status
+  command -v dkms >/dev/null 2>&1 || return 0
+  status=$(dkms status -k "$release" 2>/dev/null || true)
+  if [ -z "$status" ]; then
+    log_warning "No DKMS modules are built for ${release}; run: dkms autoinstall -k ${release}"
+    return 0
+  fi
+  printf '%s\n' "$status" | while IFS= read -r line; do
+    log_info "DKMS: ${line}"
+  done
+}
+
+configure_kernel_name() {
+  [ -n "$KERNEL_TAG" ] || return 0
+  scripts/config --set-str LOCALVERSION "$KERNEL_TAG"
+  scripts/config --disable LOCALVERSION_AUTO
+}
+
+assert_kernel_name() {
+  [ -n "$KERNEL_TAG" ] || return 0
+  local got
+  got=$(scripts/config --state LOCALVERSION)
+  [ "$got" = "$KERNEL_TAG" ] || fatal "Kernel name: CONFIG_LOCALVERSION is '${got}', expected '${KERNEL_TAG}'"
+  got=$(scripts/config --state LOCALVERSION_AUTO)
+  [ "$got" = "n" ] || fatal "Kernel name: CONFIG_LOCALVERSION_AUTO is '${got}', expected 'n'"
+}
+
 configure_lto() {
   case "$LTO" in
     none)
@@ -2456,6 +2531,7 @@ install_kernel() {
       fi
       configure_cpu
       configure_lto
+      configure_kernel_name
       if [ -n "$PROFILE" ]; then
         log_info "Applying optimization profile: ${PROFILE}"
         apply_profile "$PROFILE"
@@ -2475,6 +2551,7 @@ install_kernel() {
       fi
       assert_cpu
       assert_lto
+      assert_kernel_name
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -2554,6 +2631,7 @@ install_kernel() {
     run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image and headers: ${LINUX_VER}"
   fi
   log_success "Installation finished"
+  check_dkms_release "$LINUX_FULL_VER"
   # else
   #   # Install
   #   run_ok "dpkg -i linux-image-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"

@@ -34,10 +34,14 @@ check "an unknown CPU tuning is rejected" grep -q 'Unknown CPU tuning' <<<"$out"
 out=$(setsid bash "$SCRIPT" --lto is-not-lto </dev/null 2>&1)
 check "an unknown LTO mode is rejected" grep -q 'Unknown LTO mode' <<<"$out"
 
+out=$(setsid bash "$SCRIPT" --kernel-tag 'bad tag' </dev/null 2>&1)
+check "an invalid kernel tag is rejected" grep -q 'must use lowercase' <<<"$out"
+
 out=$(setsid bash "$SCRIPT" --help </dev/null 2>&1)
 check "help documents --source" grep -q -- '--source' <<<"$out"
 check "help documents --sched" grep -q -- '--sched' <<<"$out"
 check "help documents --cpu" grep -q -- '--cpu' <<<"$out"
 check "help documents --lto" grep -q -- '--lto' <<<"$out"
+check "help documents --kernel-tag" grep -q -- '--kernel-tag' <<<"$out"
 
 exit "$fail"
