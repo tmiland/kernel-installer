@@ -185,7 +185,7 @@ jobs:
             # resolved at argument parsing, before the build changes directory.
             # The success path removes $INSTALL_DIR, so verify via the install
             # log: the archive was downloaded under the invocation directory.
-            grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
+            grep -q "Verified tarball: .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
       - name: Boot smoke test

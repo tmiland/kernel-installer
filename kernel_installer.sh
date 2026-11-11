@@ -2353,7 +2353,8 @@ install_kernel() {
       if ! RUN_ERRORS_FATAL='' run_ok "get_verified_cachyos_tarball" "Downloading and Verifying CachyOS source tarball..."; then
         fatal "Failed to download and verify the CachyOS source tarball: ${VERIFY_ERROR:-see the log for details}"
       fi
-      log_success "Downloaded and verified ${TARGET}"
+      log_debug "Verified tarball: ${TARGET}"
+      log_success "Downloaded and verified ${TARGET##*/}"
       file_ext=gz
     elif [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
       # get-verified-tarball function; handle a failure here (not in run_ok)
@@ -2361,7 +2362,8 @@ install_kernel() {
       if ! RUN_ERRORS_FATAL='' run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
         fatal "Failed to download and verify the kernel tarball: ${VERIFY_ERROR:-see the log for details}"
       fi
-      log_success "Downloaded and verified ${TARGET}"
+      log_debug "Verified tarball: ${TARGET}"
+      log_success "Downloaded and verified ${TARGET##*/}"
       file_ext=xz
     else
       if [ "$LINUX_VER_NAME" = "Mainline" ]; then
