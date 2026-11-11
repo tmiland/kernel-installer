@@ -120,27 +120,37 @@ For usage, run:
 
 ```bash
 Usage:  kernel_installer.sh [options]
-  If called without arguments, installs stable kernel 7.2.11 using /opt/linux-kernel
+  If called without arguments, installs stable kernel 7.3.4 using /opt/linux-kernel
 
---help                 |-h   display this help and exit
---kernel               |-k   kernel version of choice
---stable               |-s   stable kernel version 7.2.11
---mainline             |-m   mainline kernel version 7.3-rc7
---longterm             |-l   longterm kernel version 6.18.57
---dir                  |-d   install directory
---kexec                |-x   load new kernel without reboot
---config               |-c   set configuration target
---custom-config        |-cc  set custom configuration directive, can be used multiple times
---verbose              |-v   increase verbosity
---get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
---nproc                |-n   set the number of processing units to use
---enable-debug-info    |-edi enable debug info
---lowlatency           |-low convert generic config to lowlatency
---list-installed       |-li  list installed kernels
---default-compression  |-dc  select default compression algorithm
---changelog            |-cl  view changelog for kernel version
---update               |-upd check for a verified script update
---uninstall            |-u   uninstall kernel (use with -k option)
+  --help                 |-h   display this help and exit
+  --kernel               |-k   kernel version of choice
+  --stable               |-s   stable kernel version 7.3.4
+  --mainline             |-m   mainline kernel version 7.4-rc2
+  --longterm             |-l   longterm kernel version 6.18.63
+  --dir                  |-d   install directory
+  --kexec                |-x   load new kernel without reboot
+  --config               |-c   set configuration target
+  --custom-config        |-cc  set custom configuration directive, can be used multiple times
+  --profile              |-p   optimization profile (see --list-profiles)
+  --list-profiles        |-lp  list optimization profiles and exit
+  --base-config          |-bc  profile base config: running, a path, cachyos, or none
+  --source               |      kernel source: vanilla (kernel.org) or cachyos (pinned)
+  --sched                |      scheduler for the cachyos source: eevdf or bore
+  --cpu                  |      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4
+  --lto                  |      LTO: none, thin, or full (requires clang/lld)
+  --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
+  --verbose              |-v   increase verbosity
+  --get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
+  --nproc                |-n   set the number of processing units to use
+  --enable-debug-info    |-edi enable debug info
+  --lowlatency           |-low convert generic config to lowlatency
+  --list-installed       |-li  list installed kernels
+  --default-compression  |-dc  select default compression algorithm
+  --changelog            |-cl  view changelog for kernel version
+  --update               |-upd check for a verified script update
+  --uninstall            |-u   uninstall kernel (default: running kernel; use -k for another)
+
+  Installed kernel version: 7.3.4  | Script version: 1.3.1
 ```
 
 The versions shown are looked up live from kernel.org each time the script runs.
@@ -158,6 +168,8 @@ To use --dir opt:
 ./kernel_installer.sh --dir /path/to/dir
 ```
 The source is downloaded and built in a `linux-kernel` subdirectory (here `/path/to/dir/linux-kernel`, default `/opt/linux-kernel`), which is removed after a successful install. The script refuses to use a directory that is not empty unless it created it in a previous run.
+
+The path passed to `--dir` is the **parent**. It must be owned by you (or root) and must not be group/other-writable unless it is sticky; the installer creates a missing parent with mode `0700`. If it reports `Install directory parent ... is writable by group or others`, run `chmod 700 /path/to/parent` or choose a private directory.
 To load [kernel without reboot](https://linux.die.net/man/8/kexec):
 ```bash
 ./kernel_installer.sh --kexec
@@ -267,8 +279,9 @@ It is pinned to **7.3.4-1** and verified with the CachyOS release keys; the
 config and BORE patch are pinned by commit and SHA256.
 
 ```bash
-./kernel_installer.sh --source cachyos --profile workstation
-./kernel_installer.sh --source cachyos --sched bore --profile workstation
+sudo ./kernel_installer.sh -d /path/to/parent \
+  --source cachyos --sched bore --profile workstation
+# resulting kernel release: 7.3.4-cachyos-workstation-bore
 ```
 
 - `--source cachyos` builds the pinned CachyOS source instead of kernel.org.
@@ -323,8 +336,14 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 build without a profile stays untagged. `CONFIG_LOCALVERSION_AUTO` is disabled
 for named builds. A new localversion is a new kernel release, so DKMS modules
 must be rebuilt for it; the installer warns when `dkms status -k <release>`
-finds no modules. Use the full release for removal, e.g.
-`--uninstall -k "$(uname -r)"` (the default without `-k`).
+finds no modules. Rebuild them for the named release with:
+
+```bash
+sudo dkms autoinstall -k "$(uname -r)"
+```
+
+Use the full release for removal, e.g. `--uninstall -k "$(uname -r)"`
+(the default without `-k`).
 
 ### Custom configuration directives
 
