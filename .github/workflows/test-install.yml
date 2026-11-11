@@ -380,7 +380,7 @@ jobs:
           if-no-files-found: ignore
 
   cachyos-bore-smoke:
-    name: CachyOS BORE ${{ matrix.name }}
+    name: CachyOS BORE + LTO + native ${{ matrix.name }}
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -405,7 +405,7 @@ jobs:
           apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
       - uses: actions/checkout@v4
       - name: Build and install CachyOS BORE kernel
-        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation
+        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation --cpu native --lto thin
       - name: Show installer log on failure
         if: failure()
         run: |
@@ -419,6 +419,9 @@ jobs:
           test -f "$cfg"
           grep -q '^CONFIG_CACHY=y$' "$cfg"
           grep -q '^CONFIG_SCHED_BORE=y$' "$cfg"
+          grep -q '^CONFIG_X86_NATIVE_CPU=y$' "$cfg"
+          grep -q '^CONFIG_CC_IS_CLANG=y$' "$cfg"
+          grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$cfg"
           grep -q '^CONFIG_HZ=1000$' "$cfg"
           grep -q '^CONFIG_PREEMPT=y$' "$cfg"
           grep -q '^CONFIG_LRU_GEN=y$' "$cfg"

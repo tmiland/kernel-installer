@@ -281,16 +281,25 @@ config and BORE patch are pinned by commit and SHA256.
   `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
   kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
   the BORE patch.
-- CI builds and boots the BORE kernel on Debian 13 and Ubuntu 24.04, with the
-  `workstation` profile.
+- CI builds and boots the BORE kernel with Clang ThinLTO and native CPU
+  tuning on Debian 13 and Ubuntu 24.04, with the `workstation` profile.
 - Checkout runs verify the CachyOS source with `src/keys/cachyos.asc`; piped
   runs fetch the same pinned fingerprints from keys.openpgp.org.
 - The CachyOS pins live in `kernel_installer.sh` (`CACHYOS_*`). Update the
   source tag, PKGBUILD revision, config SHA256, patch revision and patch
   SHA256 together; a mismatch fails closed.
+- `--cpu generic|native|zen4|x86-64-v3|x86-64-v4` selects the CPU target.
+  `generic` is the default and portable. `native` uses `X86_NATIVE_CPU` and
+  builds for the machine doing the build (it may not boot optimally on another
+  machine). `zen4`, `x86-64-v3`, and `x86-64-v4` require `--source cachyos`;
+  they use the CachyOS `MZEN4`/`X86_64_VERSION` options.
+- `--lto none|thin|full` enables Clang LTO. `thin`/`full` install
+  `clang`, `lld`, and `llvm` on demand, configure `LTO_CLANG_THIN`/`FULL`, and
+  build with `LLVM=1 LLVM_IAS=1`; `none` is the default. The kernel is
+  boot-smoked after the build.
 - This is the CachyOS base patchset plus BORE, not the full CachyOS variant
-  matrix. BMQ, sched_ext, LTO, native CPU tuning, and the remaining wiki
-  features are separate follow-ups.
+  matrix. BMQ, sched_ext, and the remaining wiki features are separate
+  follow-ups.
 
 ### Custom configuration directives
 

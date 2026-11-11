@@ -160,6 +160,11 @@ CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
 SOURCE=${SOURCE:-vanilla}
 # Scheduler selection for the CachyOS source: eevdf or bore
 KERNEL_SCHED=${KERNEL_SCHED:-eevdf}
+# CPU tuning: generic (portable), native, zen4, x86-64-v3, x86-64-v4
+CPU=${CPU:-generic}
+# Link-time optimization: none, thin, or full (requires clang/lld)
+LTO=${LTO:-none}
+MAKE_LLVM=${MAKE_LLVM:-}
 
 # Include functions
 # Only trust src/slib.sh next to the script when the script itself is a file.
@@ -253,7 +258,7 @@ log_diagnostics() {
   done
   log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
   log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
-  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, cpu: ${CPU}, lto: ${LTO}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
   log_debug "Diagnostics: running kernel's config: $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none")"
   log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
   log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
@@ -544,7 +549,8 @@ installed_kernel_pkg() {
 # yet, no Makefile).
 built_kernelrelease() {
   local release
-  release=$(cd "$1" 2>/dev/null && make -s kernelrelease 2>/dev/null) || return 1
+  # shellcheck disable=SC2086
+  release=$(cd "$1" 2>/dev/null && ${MAKE_LLVM:+$MAKE_LLVM }make -s kernelrelease 2>/dev/null) || return 1
   [[ -n $release ]] || return 1
   printf '%s\n' "$release"
 }
@@ -1216,6 +1222,8 @@ update_updater () {
           BASE_CONFIG="$BASE_CONFIG" \
           SOURCE="$SOURCE" \
           KERNEL_SCHED="$KERNEL_SCHED" \
+          CPU="$CPU" \
+          LTO="$LTO" \
           BANNERS="$BANNERS" \
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
@@ -1249,6 +1257,8 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, cachyos, or none"
   printf "%s\\n" "  ${YELLOW}--source               |${NORMAL}      kernel source: vanilla (kernel.org) or cachyos (pinned)"
   printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
+  printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
+  printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -1368,6 +1378,22 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
+    --cpu)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        generic | native | zen4 | x86-64-v3 | x86-64-v4) CPU="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown CPU tuning: $2 (generic, native, zen4, x86-64-v3, x86-64-v4)" ;;
+      esac
+      shift 2
+      ;;
+    --lto)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        none | thin | full) LTO="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown LTO mode: $2 (none, thin, full)" ;;
+      esac
+      shift 2
+      ;;
     --kexec | -x)
       shift
       KEXEC=1
@@ -1441,6 +1467,18 @@ fi
 
 if [ "$BASE_CONFIG" = "cachyos" ] && [ "$SOURCE" != "cachyos" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --base-config cachyos requires --source cachyos"
+fi
+
+case "$CPU" in
+  zen4 | x86-64-v3 | x86-64-v4)
+    [ "$SOURCE" = "cachyos" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --cpu $CPU requires --source cachyos"
+    ;;
+esac
+
+if [ "$LTO" != "none" ]; then
+  MAKE_LLVM="LLVM=1 LLVM_IAS=1"
+else
+  MAKE_LLVM=""
 fi
 
 # --lowlatency is kept as an alias for --profile lowlatency. Refuse the
@@ -1665,6 +1703,11 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
 else
   echo -e "${RED}${BALLOT_X} Error: Sorry, your OS is not supported.${NORMAL}"
   exit 1;
+fi
+
+if [ "$LTO" != "none" ]; then
+  # LTO needs clang/LLD; install them only when requested.
+  INSTALL_PKGS="$INSTALL_PKGS clang lld llvm"
 fi
 
 case "$DEFAULT_COMPRESSION" in
@@ -2154,6 +2197,96 @@ assert_cachyos_source() {
   fi
 }
 
+configure_cpu() {
+  case "$CPU" in
+    generic)
+      if [ "$SOURCE" = "cachyos" ]; then
+        scripts/config --enable GENERIC_CPU
+        scripts/config --set-val X86_64_VERSION 1
+        scripts/config --disable X86_NATIVE_CPU
+        scripts/config --disable MZEN4
+      fi
+      ;;
+    native)
+      scripts/config --enable X86_NATIVE_CPU
+      scripts/config --disable GENERIC_CPU
+      scripts/config --disable MZEN4
+      ;;
+    zen4)
+      scripts/config --enable MZEN4
+      scripts/config --disable GENERIC_CPU
+      scripts/config --disable X86_NATIVE_CPU
+      ;;
+    x86-64-v3 | x86-64-v4)
+      scripts/config --enable GENERIC_CPU
+      scripts/config --disable X86_NATIVE_CPU
+      scripts/config --disable MZEN4
+      scripts/config --set-val X86_64_VERSION "${CPU##*-v}"
+      ;;
+  esac
+}
+
+assert_cpu() {
+  local got
+  case "$CPU" in
+    generic)
+      [ "$SOURCE" = "cachyos" ] || return 0
+      got=$(scripts/config --state GENERIC_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning generic: CONFIG_GENERIC_CPU is '${got}', expected 'y'"
+      got=$(scripts/config --state X86_64_VERSION)
+      [ "$got" = "1" ] || fatal "CPU tuning generic: CONFIG_X86_64_VERSION is '${got}', expected '1'"
+      ;;
+    native)
+      got=$(scripts/config --state X86_NATIVE_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning native: CONFIG_X86_NATIVE_CPU is '${got}', expected 'y'"
+      ;;
+    zen4)
+      got=$(scripts/config --state MZEN4)
+      [ "$got" = "y" ] || fatal "CPU tuning zen4: CONFIG_MZEN4 is '${got}', expected 'y'"
+      ;;
+    x86-64-v3 | x86-64-v4)
+      got=$(scripts/config --state GENERIC_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning ${CPU}: CONFIG_GENERIC_CPU is '${got}', expected 'y'"
+      got=$(scripts/config --state X86_64_VERSION)
+      [ "$got" = "${CPU##*-v}" ] || fatal "CPU tuning ${CPU}: CONFIG_X86_64_VERSION is '${got}', expected '${CPU##*-v}'"
+      ;;
+  esac
+}
+
+configure_lto() {
+  case "$LTO" in
+    none)
+      scripts/config --enable LTO_NONE
+      scripts/config --disable LTO_CLANG_THIN
+      scripts/config --disable LTO_CLANG_FULL
+      ;;
+    thin)
+      scripts/config --enable LTO_CLANG_THIN
+      scripts/config --disable LTO_CLANG_FULL
+      scripts/config --disable LTO_NONE
+      ;;
+    full)
+      scripts/config --enable LTO_CLANG_FULL
+      scripts/config --disable LTO_CLANG_THIN
+      scripts/config --disable LTO_NONE
+      ;;
+  esac
+}
+
+assert_lto() {
+  [ "$LTO" = "none" ] && return 0
+  local got
+  got=$(scripts/config --state CC_IS_CLANG)
+  [ "$got" = "y" ] || fatal "LTO ${LTO}: CONFIG_CC_IS_CLANG is '${got}', expected 'y'"
+  if [ "$LTO" = "thin" ]; then
+    got=$(scripts/config --state LTO_CLANG_THIN)
+    [ "$got" = "y" ] || fatal "LTO thin: CONFIG_LTO_CLANG_THIN is '${got}', expected 'y'"
+  else
+    got=$(scripts/config --state LTO_CLANG_FULL)
+    [ "$got" = "y" ] || fatal "LTO full: CONFIG_LTO_CLANG_FULL is '${got}', expected 'y'"
+  fi
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -2279,11 +2412,12 @@ install_kernel() {
       fi
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
-        if ! make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
+        # shellcheck disable=SC2086
+        if ! ${MAKE_LLVM:+$MAKE_LLVM }make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
           fatal "make $CONFIG_OPTION failed"
         fi
       else
-        run_ok "make $CONFIG_OPTION" "Writing configuration..."
+        run_ok "${MAKE_LLVM:+$MAKE_LLVM }make $CONFIG_OPTION" "Writing configuration..."
       fi
       log_success "Configuration finished"
       read_sleep 1
@@ -2315,6 +2449,8 @@ install_kernel() {
       if [ "$SOURCE" = "cachyos" ]; then
         configure_cachyos_source
       fi
+      configure_cpu
+      configure_lto
       if [ -n "$PROFILE" ]; then
         log_info "Applying optimization profile: ${PROFILE}"
         apply_profile "$PROFILE"
@@ -2325,13 +2461,15 @@ install_kernel() {
       done
       # After --custom-config, so a certificate the user provides is kept
       clear_missing_cert_keys
-      run_ok "make olddefconfig" "Finalizing configuration..."
+      run_ok "${MAKE_LLVM:+$MAKE_LLVM }make olddefconfig" "Finalizing configuration..."
       if [ -n "$PROFILE" ]; then
         assert_profile "$PROFILE"
       fi
       if [ "$SOURCE" = "cachyos" ]; then
         assert_cachyos_source
       fi
+      assert_cpu
+      assert_lto
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -2347,7 +2485,7 @@ install_kernel() {
       # Remember where the build output starts in the log, and handle a
       # failure here (instead of run_ok's tail) to point at the real error
       build_log_start=$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0)
-      if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
+      if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | ${MAKE_LLVM:+$MAKE_LLVM }make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
         report_build_failure "$build_log_start"
         exit 1
       fi
