@@ -81,6 +81,10 @@ VERBOSE=${VERBOSE:-0}
 ENABLE_DEBUG_INFO=${ENABLE_DEBUG_INFO:-0}
 # Low latency (Default off)
 LOWLATENCY=${LOWLATENCY:-0}
+# Optimization profile (empty = no profile)
+PROFILE=${PROFILE:-}
+# Base config for profile builds: running, a path, or none (empty = none)
+BASE_CONFIG=${BASE_CONFIG:-}
 # get-verified-tarball (Default: yes; set GET_VERIFIED_TARBALL=0 to skip verification)
 GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-1}
 # Show banners (Default: yes)
@@ -227,8 +231,8 @@ log_diagnostics() {
   done
   log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
   log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
-  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, config: ${CONFIG_OPTION}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
-  log_debug "Diagnostics: running kernel's config (base for olddefconfig/oldconfig): $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none, so arch defconfig is the base")"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: running kernel's config: $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none")"
   log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
   log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
   log_debug "Diagnostics: disk free for ${INSTALL_DIR}: $(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 {printf "%d MiB on %s", $4 / 1024, $6}')"
@@ -637,6 +641,295 @@ clear_missing_cert_keys() {
   done
 }
 
+# --- Optimization profiles ---
+# Profiles are config deltas applied after the kernel's base configuration.
+# They deliberately avoid symbols that need an out-of-tree patchset (BORE,
+# CACHY) or DEBUG_INFO_BTF (sched_ext); those are separate opt-ins.
+profile_cfg() {
+  log_debug "Profile ${PROFILE}: scripts/config $*"
+  scripts/config "$@"
+}
+
+profile_kernel_ge() {
+  [ "$(versionToInt "$1")" -ge "$(versionToInt "$2")" ]
+}
+
+profile_set_hz() {
+  local hz=$1 other
+  profile_cfg --set-val HZ "$hz"
+  profile_cfg --enable "HZ_${hz}"
+  for other in 100 250 300 1000; do
+    [ "$other" = "$hz" ] || profile_cfg --disable "HZ_${other}"
+  done
+}
+
+profile_set_preempt_full() {
+  profile_cfg --enable PREEMPT_DYNAMIC
+  profile_cfg --enable PREEMPT
+  profile_cfg --disable PREEMPT_LAZY
+  profile_cfg --disable PREEMPT_VOLUNTARY
+  profile_cfg --disable PREEMPT_NONE
+}
+
+profile_set_preempt_relaxed() {
+  local lazy_state
+  profile_cfg --enable PREEMPT_DYNAMIC
+  profile_cfg --disable PREEMPT
+  lazy_state=$(scripts/config --state PREEMPT_LAZY)
+  if [ "$lazy_state" != "undef" ]; then
+    profile_cfg --disable PREEMPT_VOLUNTARY
+    profile_cfg --disable PREEMPT_NONE
+    profile_cfg --enable PREEMPT_LAZY
+  else
+    profile_cfg --disable PREEMPT_LAZY
+    profile_cfg --disable PREEMPT_NONE
+    profile_cfg --enable PREEMPT_VOLUNTARY
+  fi
+}
+
+profile_set_thp_madvise() {
+  profile_cfg --enable TRANSPARENT_HUGEPAGE
+  profile_cfg --enable TRANSPARENT_HUGEPAGE_MADVISE
+  profile_cfg --disable TRANSPARENT_HUGEPAGE_ALWAYS
+}
+
+profile_set_lru_gen() {
+  if profile_kernel_ge "$LINUX_VER" 6.1; then
+    profile_cfg --enable LRU_GEN
+    profile_cfg --enable LRU_GEN_ENABLED
+  else
+    log_info "LRU_GEN is not available before Linux 6.1; skipping"
+  fi
+}
+
+profile_set_bbr() {
+  profile_cfg --enable TCP_CONG_BBR
+  profile_cfg --enable NET_SCH_FQ
+}
+
+profile_set_bbr_default() {
+  profile_cfg --disable DEFAULT_CUBIC
+  profile_cfg --enable DEFAULT_BBR
+  profile_cfg --set-str DEFAULT_TCP_CONG bbr
+}
+
+profile_set_o2() {
+  profile_cfg --enable CC_OPTIMIZE_FOR_PERFORMANCE
+  profile_cfg --disable CC_OPTIMIZE_FOR_PERFORMANCE_O3
+}
+
+profile_set_cgroup() {
+  profile_cfg --enable PSI
+  profile_cfg --enable CGROUPS
+  profile_cfg --enable MEMCG
+  profile_cfg --enable BPF_SYSCALL
+  profile_cfg --enable BPF_JIT
+  profile_cfg --enable CGROUP_BPF
+  profile_cfg --enable FAIR_GROUP_SCHED
+  profile_cfg --enable CFS_BANDWIDTH
+  profile_cfg --enable SCHED_AUTOGROUP
+}
+
+profile_common() {
+  profile_set_thp_madvise
+  profile_set_lru_gen
+  profile_cfg --enable PSI
+  profile_cfg --enable ZRAM
+  profile_set_bbr
+}
+
+# Balanced interactive desktop: low timer latency, full preemption, MGLRU,
+# THP madvise, BBR and O3 (the CachyOS-style compiler choice).
+profile_desktop() {
+  profile_common
+  profile_set_hz 1000
+  profile_set_preempt_full
+  profile_set_o2
+}
+
+# Build-heavy interactive desktop (LLM/Android builds): the desktop profile
+# plus the cgroup knobs needed to keep builds in their own slice, and BBR as
+# the default congestion control.
+profile_workstation() {
+  profile_desktop
+  profile_set_cgroup
+  profile_set_bbr_default
+}
+
+# Same timer/scheduler trade-off as desktop; kept separate so a gaming profile
+# can grow scheduler-specific options without changing daily-driver defaults.
+profile_gaming() {
+  profile_desktop
+}
+
+# Throughput server: 250 Hz, relaxed preemption, O2, BBR default, and the
+# group-scheduling knobs systemd needs for per-service CPU limits.
+profile_server() {
+  profile_common
+  profile_set_hz 250
+  profile_set_preempt_relaxed
+  profile_set_o2
+  profile_set_cgroup
+  profile_cfg --set-val NR_CPUS 256
+  profile_set_bbr_default
+}
+
+# Battery/thermal profile: 300 Hz, relaxed preemption, schedutil, P-state,
+# the energy model, MGLRU and zram-friendly memory defaults.
+profile_laptop() {
+  profile_common
+  profile_set_hz 300
+  profile_set_preempt_relaxed
+  profile_set_o2
+  profile_cfg --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+  profile_cfg --enable X86_AMD_PSTATE
+  profile_cfg --enable X86_INTEL_PSTATE
+  profile_cfg --enable ENERGY_MODEL
+}
+
+# Legacy --lowlatency behavior. This is low-latency, not PREEMPT_RT.
+profile_lowlatency() {
+  profile_set_hz 1000
+  profile_set_preempt_full
+  profile_cfg --enable LATENCYTOP
+  profile_cfg --disable COMEDI_TESTS_EXAMPLE
+  profile_cfg --disable COMEDI_TESTS_NI_ROUTES
+  profile_cfg --set-val TEST_DIV64 m
+}
+
+profile_is_valid() {
+  case "$1" in
+    desktop | workstation | gaming | server | laptop | lowlatency) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_profile() {
+  case "$1" in
+    desktop) profile_desktop ;;
+    workstation) profile_workstation ;;
+    gaming) profile_gaming ;;
+    server) profile_server ;;
+    laptop) profile_laptop ;;
+    lowlatency) profile_lowlatency ;;
+    *) fatal "Unknown optimization profile: $1" ;;
+  esac
+}
+
+# Fail the build if a profile symbol did not survive olddefconfig. This is
+# what catches a profile that was silently dropped by a Kconfig dependency.
+profile_assert() {
+  local spec sym want got
+  for spec in "$@"; do
+    sym=${spec%%=*}
+    want=${spec#*=}
+    got=$(scripts/config --state "$sym")
+    if [ "$got" != "$want" ]; then
+      fatal "Profile ${PROFILE}: CONFIG_${sym} is '${got}', expected '${want}'"
+    fi
+  done
+}
+
+assert_profile() {
+  local common=(
+    TRANSPARENT_HUGEPAGE_MADVISE=y
+    TRANSPARENT_HUGEPAGE_ALWAYS=n
+    PSI=y
+    ZRAM=y
+    TCP_CONG_BBR=y
+    NET_SCH_FQ=y
+  )
+  if profile_kernel_ge "$LINUX_VER" 6.1; then
+    common+=(LRU_GEN=y LRU_GEN_ENABLED=y)
+  fi
+
+  case "$1" in
+    desktop | gaming)
+      profile_assert "${common[@]}" \
+        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y
+      ;;
+    workstation)
+      profile_assert "${common[@]}" \
+        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
+        DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+      ;;
+    server)
+      profile_assert "${common[@]}" \
+        HZ=250 HZ_250=y PREEMPT=n \
+        CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
+        NR_CPUS=256 DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+      ;;
+    laptop)
+      profile_assert "${common[@]}" \
+        HZ=300 HZ_300=y PREEMPT=n \
+        CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y X86_AMD_PSTATE=y \
+        X86_INTEL_PSTATE=y ENERGY_MODEL=y
+      ;;
+    lowlatency)
+      profile_assert \
+        HZ=1000 HZ_1000=y PREEMPT=y LATENCYTOP=y
+      ;;
+    *)
+      fatal "Unknown optimization profile: $1"
+      ;;
+  esac
+}
+
+list_profiles() {
+  cat <<'EOF'
+desktop       Balanced interactive desktop: HZ 1000, full preempt, MGLRU, THP madvise, BBR, O2
+workstation   Build-heavy interactive desktop: desktop + PSI/cgroup CPU limits + BBR default
+gaming        Low-latency games: desktop timer/preempt settings, O2
+server        Throughput server: HZ 250, relaxed preempt, MGLRU, BBR default, O2
+laptop        Battery/thermal: HZ 300, relaxed preempt, schedutil/P-state, energy model, O2
+lowlatency    Legacy low-latency profile: HZ 1000, full preempt, LATENCYTOP (not PREEMPT_RT)
+EOF
+}
+
+# Copy the base config before the make target runs. Profiles default to the
+# running kernel's config so the resulting kernel keeps the hardware support
+# the machine already has; --base-config none keeps the historical behavior.
+prepare_base_config() {
+  [ -n "$BASE_CONFIG" ] || return 0
+  case "$BASE_CONFIG" in
+    none) return 0 ;;
+    running)
+      local src
+      src="/boot/config-$(uname -r)"
+      if [ ! -f "$src" ]; then
+        fatal "Base config ${src} not found; use --base-config /path or --base-config none"
+        return 1
+      fi
+      if ! cp -f "$src" .config; then
+        fatal "Could not copy ${src} to .config"
+        return 1
+      fi
+      log_info "Using base kernel config: ${src}"
+      ;;
+    *)
+      if [ ! -f "$BASE_CONFIG" ]; then
+        fatal "Base config not found: ${BASE_CONFIG}"
+        return 1
+      fi
+      if ! cp -f "$BASE_CONFIG" .config; then
+        fatal "Could not copy ${BASE_CONFIG} to .config"
+        return 1
+      fi
+      log_info "Using base kernel config: ${BASE_CONFIG}"
+      ;;
+  esac
+
+  case "$CONFIG_OPTION" in
+    defconfig | savedefconfig | allnoconfig | allyesconfig | allmodconfig | alldefconfig | randconfig | tinyconfig)
+      log_warning "Base config was copied, but --config ${CONFIG_OPTION} creates a new config and will replace it."
+      ;;
+  esac
+}
+# --- End optimization profiles ---
+
 changelog() {
   curl -s https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/ChangeLog-${LINUX_VER} | less
 }
@@ -882,6 +1175,8 @@ update_updater () {
           GET_VERIFIED_TARBALL="$GET_VERIFIED_TARBALL" \
           ENABLE_DEBUG_INFO="$ENABLE_DEBUG_INFO" \
           LOWLATENCY="$LOWLATENCY" \
+          PROFILE="$PROFILE" \
+          BASE_CONFIG="$BASE_CONFIG" \
           BANNERS="$BANNERS" \
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
@@ -910,6 +1205,9 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--kexec                |-x${NORMAL}   load new kernel without reboot"
   printf "%s\\n" "  ${YELLOW}--config               |-c${NORMAL}   set configuration target"
   printf "%s\\n" "  ${YELLOW}--custom-config        |-cc${NORMAL}  set custom configuration directive, can be used multiple times"
+  printf "%s\\n" "  ${YELLOW}--profile              |-p${NORMAL}   optimization profile (see --list-profiles)"
+  printf "%s\\n" "  ${YELLOW}--list-profiles        |-lp${NORMAL}  list optimization profiles and exit"
+  printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, or none"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -988,6 +1286,31 @@ while [[ $# -gt 0 ]]; do
       CUSTOM_CONFIG_OPTIONS+=("$2")
       shift 2
       ;;
+    --profile | -p)
+      require_arg "$1" "${2:-}"
+      if ! profile_is_valid "$2"; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown optimization profile: $2 (use --list-profiles)"
+      fi
+      PROFILE="$2"
+      shift 2
+      ;;
+    --list-profiles | -lp)
+      list_profiles
+      exit 0
+      ;;
+    --base-config | -bc)
+      require_arg "$1" "${2:-}"
+      if [ "$2" != "running" ] && [ "$2" != "none" ] && [ ! -f "$2" ]; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Base config not found: $2"
+      fi
+      if [ "$2" = "running" ] || [ "$2" = "none" ]; then
+        BASE_CONFIG="$2"
+      else
+        # Resolve now, before install_kernel cd's into the kernel tree.
+        BASE_CONFIG="$(realpath -m -- "$2")"
+      fi
+      shift 2
+      ;;
     --kexec | -x)
       shift
       KEXEC=1
@@ -1044,6 +1367,23 @@ done
 
 if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
   set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+fi
+
+# --lowlatency is kept as an alias for --profile lowlatency. Refuse the
+# combination instead of guessing which one should win.
+if [ "$LOWLATENCY" = "1" ]; then
+  if [ -n "$PROFILE" ] && [ "$PROFILE" != "lowlatency" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --lowlatency cannot be combined with --profile $PROFILE"
+  fi
+  PROFILE=lowlatency
+  LOWLATENCY=0
+fi
+
+# Profiles are deltas on a real hardware config. Default to the running
+# kernel's config so the resulting kernel keeps the machine's drivers; use
+# --base-config none for the historical arch-defconfig behavior.
+if [ -n "$PROFILE" ] && [ -z "$BASE_CONFIG" ]; then
+  BASE_CONFIG=running
 fi
 
 # Custom directives must invoke scripts/config; anything else (e.g. a raw
@@ -1737,7 +2077,7 @@ install_kernel() {
       # Config
       log_debug "Phase 4 of 6: Configuration"
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
-      # cp /boot/config-"$(uname -r)" .config
+      prepare_base_config
       log_debug "Configuring..."
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
@@ -1752,19 +2092,6 @@ install_kernel() {
       # Disable debug info since it's enabled by default
       if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
         disable_debug_info "$LINUX_VER"
-      fi
-      if [ "$LOWLATENCY" = "1" ]; then
-        # convert generic config to lowlatency
-        scripts/config --disable COMEDI_TESTS_EXAMPLE
-        scripts/config --disable COMEDI_TESTS_NI_ROUTES
-        scripts/config --set-val CONFIG_HZ 1000
-        scripts/config --enable HZ_1000
-        scripts/config --disable HZ_250
-
-        scripts/config --enable LATENCYTOP
-        scripts/config --enable PREEMPT
-        scripts/config --disable PREEMPT_VOLUNTARY
-        scripts/config --set-val TEST_DIV64 m
       fi
       # Revert zstd changes from 6.12
       VER1=$LINUX_VER # version to check if is greater than or equal to
@@ -1787,12 +2114,20 @@ install_kernel() {
         scripts/config --enable CONFIG_ZRAM_BACKEND_842
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
+      if [ -n "$PROFILE" ]; then
+        log_info "Applying optimization profile: ${PROFILE}"
+        apply_profile "$PROFILE"
+      fi
       for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
       done
       # After --custom-config, so a certificate the user provides is kept
       clear_missing_cert_keys
+      run_ok "make olddefconfig" "Finalizing configuration..."
+      if [ -n "$PROFILE" ]; then
+        assert_profile "$PROFILE"
+      fi
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"

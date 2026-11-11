@@ -171,8 +171,11 @@ default is `olddefconfig`
 ### Configuration targets
 
 As listed by `make help` in the kernel source (7.3); older kernels may lack some of them.
-With the default `olddefconfig`, the kernel build picks up the running kernel's
-configuration (e.g. `/boot/config-$(uname -r)`) as the base when one is available.
+With the default `olddefconfig`, the build uses the source tree's current
+`.config` as its base. Profile builds (`--profile`) default to copying the
+running kernel's config (`/boot/config-$(uname -r)`) first; use
+`--base-config /path` to choose another config, or `--base-config none` to
+keep the historical arch-defconfig behavior.
 
 ```bash
 config          - Update current config utilising a line-oriented program
@@ -198,6 +201,64 @@ helpnewconfig   - List new options and help text
 olddefconfig    - Same as oldconfig but sets new symbols to their default value without prompting
 tinyconfig      - Configure the tiniest possible kernel
 ```
+
+### Optimization profiles
+
+Profiles apply a small set of kernel configuration changes for an intended
+workload. They are starting points, not guarantees: benchmark the result with
+your own build/game/server workload.
+
+```bash
+./kernel_installer.sh --list-profiles
+./kernel_installer.sh --profile workstation
+./kernel_installer.sh --profile server --base-config /boot/config-$(uname -r)
+./kernel_installer.sh --profile desktop --base-config none
+```
+
+A profile build uses the running kernel's config as its base by default, so
+the resulting kernel keeps the drivers the machine already uses. Use
+`--base-config /path` for another config, or `--base-config none` to start
+from the historical arch defconfig (useful in containers and CI). The
+repeatable `--custom-config` directives are applied after the profile, so they
+can override any profile value.
+
+| Profile | Best for | Key settings |
+|---|---|---|
+| `desktop` | daily interactive desktop | HZ 1000, full preempt, THP madvise, MGLRU, BBR, O2 |
+| `workstation` | LLM/Android builds plus a responsive desktop | desktop + PSI/cgroup CPU limits, BBR default |
+| `gaming` | latency-sensitive games | desktop timer/preempt settings, O2 |
+| `server` | network/storage throughput | HZ 250, relaxed preempt, MGLRU, BBR default, NR_CPUS 256, O2 |
+| `laptop` | battery and thermals | HZ 300, relaxed preempt, schedutil, AMD/Intel P-state, energy model, MGLRU, O2 |
+| `lowlatency` | audio/live interactive work (legacy alias) | HZ 1000, full preempt, LATENCYTOP; not PREEMPT_RT |
+
+Notes:
+
+- `--lowlatency` is kept as an alias for `--profile lowlatency`. Combining it
+  with a different `--profile` is an error.
+- The `workstation`/`server` profiles enable the cgroup knobs systemd needs
+  (`MEMCG`, `CGROUP_BPF`, `FAIR_GROUP_SCHED`, `CFS_BANDWIDTH`). Use them with a
+  build slice, for example:
+
+  ```bash
+  systemd-run --user --scope --slice=build.slice \
+    -p CPUWeight=50 -p IOWeight=50 -p MemoryHigh=75% \
+    bash -lc 'make -j$(( $(nproc) - 2 ))'
+  ```
+
+  The kernel profile reduces scheduler latency; the cgroup is what reserves
+  capacity for the desktop under a sustained build.
+- `server`/`laptop` use relaxed preemption (`PREEMPT_LAZY` where the kernel
+  provides it, otherwise voluntary). On current x86 kernels the old
+  `PREEMPT_NONE`/`PREEMPT_VOLUNTARY` choices are not both available.
+- BBR: `workstation`/`server` make it the default (`DEFAULT_BBR`); the other
+  profiles enable the module but leave the default congestion control alone.
+  Use `sysctl net.ipv4.tcp_congestion_control=bbr` and
+  `sysctl net.core.default_qdisc=fq` if you want BBR at runtime.
+- Not included in the first cut: BORE/CACHY (require the CachyOS patchset),
+  sched_ext (requires `DEBUG_INFO_BTF` and `pahole`, which conflicts with the
+  default debug-info-off build), O3 (not exposed by vanilla 7.3.4; CachyOS
+  carries an out-of-tree O3 option), LTO, and native CPU tuning. These are
+  separate follow-ups.
 
 ### Custom configuration directives
 
