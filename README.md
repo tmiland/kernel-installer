@@ -339,6 +339,9 @@ must be rebuilt for it; the installer warns when `dkms status -k <release>`
 finds no modules. Rebuild them for the named release with:
 
 ```bash
+# use the release printed by the installer
+sudo dkms autoinstall -k 7.3.4-cachyos-workstation-bore
+# or, after booting that kernel:
 sudo dkms autoinstall -k "$(uname -r)"
 ```
 
