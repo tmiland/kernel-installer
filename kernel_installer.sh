@@ -165,6 +165,14 @@ CPU=${CPU:-generic}
 # Link-time optimization: none, thin, or full (requires clang/lld)
 LTO=${LTO:-none}
 MAKE_LLVM=${MAKE_LLVM:-}
+# Timer frequency override (100/250/300/1000; 500/600/750 on CachyOS)
+HZ_OVERRIDE=${HZ_OVERRIDE:-}
+# BBRv3 default TCP congestion control (CachyOS source only)
+BBR3=${BBR3:-0}
+# Android Binder IPC and binderfs (Waydroid)
+BINDER=${BINDER:-0}
+# sched_ext and BTF for userspace BPF schedulers
+SCHED_EXT=${SCHED_EXT:-0}
 # Optional custom localversion suffix (without or with a leading hyphen)
 KERNEL_TAG=${KERNEL_TAG:-}
 
@@ -885,6 +893,10 @@ build_kernel_tag() {
     thin) tag+="-lto" ;;
     full) tag+="-ltofull" ;;
   esac
+  [ -n "$HZ_OVERRIDE" ] && tag+="-hz${HZ_OVERRIDE}"
+  [ "$BBR3" = "1" ] && tag+="-bbr3"
+  [ "$BINDER" = "1" ] && tag+="-binder"
+  [ "$SCHED_EXT" = "1" ] && tag+="-sched-ext"
   KERNEL_TAG="$tag"
 }
 
@@ -915,7 +927,7 @@ profile_assert() {
 }
 
 assert_profile() {
-  local common=(
+  local -a common=(
     TRANSPARENT_HUGEPAGE_MADVISE=y
     TRANSPARENT_HUGEPAGE_ALWAYS=n
     PSI=y
@@ -923,43 +935,61 @@ assert_profile() {
     TCP_CONG_BBR=y
     NET_SCH_FQ=y
   )
+  local -a expect=() filtered=()
+  local item use_common=1
   if profile_kernel_ge "$LINUX_VER" 6.1; then
     common+=(LRU_GEN=y LRU_GEN_ENABLED=y)
   fi
 
   case "$1" in
     desktop | gaming)
-      profile_assert "${common[@]}" \
-        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y
+      expect=(HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y)
       ;;
     workstation)
-      profile_assert "${common[@]}" \
-        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y \
+      expect=(HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y \
         MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
-        DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+        DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr)
       ;;
     server)
-      profile_assert "${common[@]}" \
-        HZ=250 HZ_250=y PREEMPT=n \
+      expect=(HZ=250 HZ_250=y PREEMPT=n \
         CC_OPTIMIZE_FOR_PERFORMANCE=y \
         MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
-        NR_CPUS=256 DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+        NR_CPUS=256 DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr)
       ;;
     laptop)
-      profile_assert "${common[@]}" \
-        HZ=300 HZ_300=y PREEMPT=n \
+      expect=(HZ=300 HZ_300=y PREEMPT=n \
         CC_OPTIMIZE_FOR_PERFORMANCE=y \
         CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y X86_AMD_PSTATE=y \
-        X86_INTEL_PSTATE=y ENERGY_MODEL=y
+        X86_INTEL_PSTATE=y ENERGY_MODEL=y)
       ;;
     lowlatency)
-      profile_assert \
-        HZ=1000 HZ_1000=y PREEMPT=y LATENCYTOP=y
+      expect=(HZ=1000 HZ_1000=y PREEMPT=y LATENCYTOP=y)
+      use_common=0
       ;;
     *)
       fatal "Unknown optimization profile: $1"
       ;;
   esac
+
+  # Explicit flags override the profile, so assert the effective values.
+  for item in "${expect[@]}"; do
+    case "$item" in
+      HZ=* | HZ_*=y)
+        [ -n "$HZ_OVERRIDE" ] && continue
+        ;;
+      DEFAULT_BBR=y | DEFAULT_TCP_CONG=bbr)
+        [ "$BBR3" = "1" ] && continue
+        ;;
+    esac
+    filtered+=("$item")
+  done
+  [ -n "$HZ_OVERRIDE" ] && filtered+=("HZ=$HZ_OVERRIDE" "HZ_${HZ_OVERRIDE}=y")
+  [ "$BBR3" = "1" ] && filtered+=(DEFAULT_BBR3=y DEFAULT_TCP_CONG=bbr3)
+  if [ "$use_common" = "1" ]; then
+    profile_assert "${common[@]}" "${filtered[@]}"
+  else
+    profile_assert "${filtered[@]}"
+  fi
 }
 
 list_profiles() {
@@ -1316,6 +1346,10 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
   printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
   printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
+  printf "%s\\n" "  ${YELLOW}--hz                   |${NORMAL}      timer frequency: 100, 250, 300, 500, 600, 750, 1000"
+  printf "%s\\n" "  ${YELLOW}--bbr3                 |${NORMAL}      make BBRv3 the default TCP congestion control (cachyos)"
+  printf "%s\\n" "  ${YELLOW}--binder               |${NORMAL}      enable Android Binder IPC and binderfs (Waydroid)"
+  printf "%s\\n" "  ${YELLOW}--sched-ext            |${NORMAL}      enable sched_ext and BTF for userspace BPF schedulers"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
@@ -1452,6 +1486,26 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
+    --hz)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        100 | 250 | 300 | 500 | 600 | 750 | 1000) HZ_OVERRIDE="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown --hz value: $2 (100, 250, 300, 500, 600, 750, 1000)" ;;
+      esac
+      shift 2
+      ;;
+    --bbr3)
+      BBR3=1
+      shift
+      ;;
+    --binder)
+      BINDER=1
+      shift
+      ;;
+    --sched-ext)
+      SCHED_EXT=1
+      shift
+      ;;
     --kernel-tag)
       require_arg "$1" "${2:-}"
       KERNEL_TAG="$2"
@@ -1555,6 +1609,18 @@ case "$CPU" in
     [ "$SOURCE" = "cachyos" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --cpu $CPU requires --source cachyos"
     ;;
 esac
+
+# 500/600/750 Hz are CachyOS choices; vanilla only has 100/250/300/1000.
+case "$HZ_OVERRIDE" in
+  '' | 100 | 250 | 300 | 1000) ;;
+  500 | 600 | 750)
+    [ "$SOURCE" = "cachyos" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --hz $HZ_OVERRIDE requires --source cachyos"
+    ;;
+esac
+
+if [ "$BBR3" = "1" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --bbr3 requires --source cachyos"
+fi
 
 if [ "$LTO" != "none" ]; then
   MAKE_LLVM="LLVM=1 LLVM_IAS=1"
@@ -1791,6 +1857,14 @@ fi
 if [ "$LTO" != "none" ]; then
   # LTO needs clang/LLD; install them only when requested.
   INSTALL_PKGS+=" clang lld llvm"
+fi
+
+if [ "$SCHED_EXT" = "1" ]; then
+  # BTF (sched_ext) is generated by pahole, provided by dwarves. The RHEL
+  # package list already includes it.
+  case "$DISTRO_GROUP" in
+    Debian) INSTALL_PKGS+=" dwarves" ;;
+  esac
 fi
 
 case "$DEFAULT_COMPRESSION" in
@@ -2398,6 +2472,88 @@ assert_lto() {
   fi
 }
 
+# Timer frequency: set HZ and the matching HZ_<n> choice, clear the others.
+configure_hz() {
+  [ -n "$HZ_OVERRIDE" ] || return 0
+  local hz=$HZ_OVERRIDE other
+  scripts/config --set-val HZ "$hz"
+  scripts/config --enable "HZ_${hz}"
+  for other in 100 250 300 500 600 750 1000; do
+    [ "$other" = "$hz" ] || scripts/config --disable "HZ_${other}"
+  done
+}
+
+# BBRv3 as the default congestion control (CachyOS patchset).
+configure_bbr3() {
+  [ "$BBR3" = "1" ] || return 0
+  scripts/config --enable TCP_CONG_BBR3
+  scripts/config --enable DEFAULT_BBR3
+  scripts/config --disable DEFAULT_BBR
+  scripts/config --set-str DEFAULT_TCP_CONG bbr3
+}
+
+# Android Binder IPC and binderfs, used by Waydroid and Android app layers.
+configure_binder() {
+  [ "$BINDER" = "1" ] || return 0
+  scripts/config --enable ANDROID_BINDER_IPC
+  scripts/config --enable ANDROID_BINDERFS
+  scripts/config --set-str ANDROID_BINDER_DEVICES "binder,hwbinder,vndbinder"
+}
+
+# sched_ext needs BTF, which the installer otherwise disables with the rest of
+# the debug information. Re-enable DWARF5 and BTF, then the scheduling class.
+configure_sched_ext() {
+  [ "$SCHED_EXT" = "1" ] || return 0
+  if [ "$(versionToInt "$LINUX_VER")" -lt "$(versionToInt 6.12)" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched-ext requires kernel 6.12 or newer"
+  fi
+  scripts/config --disable DEBUG_INFO_NONE
+  scripts/config --enable DEBUG_INFO_DWARF5
+  scripts/config --enable DEBUG_INFO_BTF
+  scripts/config --enable DEBUG_INFO_BTF_MODULES
+  scripts/config --enable BPF_SYSCALL
+  scripts/config --enable BPF_JIT
+  scripts/config --enable SCHED_CLASS_EXT
+}
+
+assert_hz() {
+  [ -n "$HZ_OVERRIDE" ] || return 0
+  local got
+  got=$(scripts/config --state HZ)
+  [ "$got" = "$HZ_OVERRIDE" ] || fatal "Timer frequency: CONFIG_HZ is '${got}', expected '${HZ_OVERRIDE}'"
+  got=$(scripts/config --state "HZ_${HZ_OVERRIDE}")
+  [ "$got" = "y" ] || fatal "Timer frequency: CONFIG_HZ_${HZ_OVERRIDE} is '${got}', expected 'y'"
+}
+
+assert_bbr3() {
+  [ "$BBR3" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state TCP_CONG_BBR3)
+  [ "$got" = "y" ] || fatal "BBR3: CONFIG_TCP_CONG_BBR3 is '${got}', expected 'y'"
+  got=$(scripts/config --state DEFAULT_BBR3)
+  [ "$got" = "y" ] || fatal "BBR3: CONFIG_DEFAULT_BBR3 is '${got}', expected 'y'"
+  got=$(scripts/config --state DEFAULT_TCP_CONG)
+  [ "$got" = "bbr3" ] || fatal "BBR3: CONFIG_DEFAULT_TCP_CONG is '${got}', expected 'bbr3'"
+}
+
+assert_binder() {
+  [ "$BINDER" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state ANDROID_BINDER_IPC)
+  [ "$got" = "y" ] || fatal "Binder: CONFIG_ANDROID_BINDER_IPC is '${got}', expected 'y'"
+  got=$(scripts/config --state ANDROID_BINDERFS)
+  [ "$got" = "y" ] || fatal "Binder: CONFIG_ANDROID_BINDERFS is '${got}', expected 'y'"
+}
+
+assert_sched_ext() {
+  [ "$SCHED_EXT" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state SCHED_CLASS_EXT)
+  [ "$got" = "y" ] || fatal "sched_ext: CONFIG_SCHED_CLASS_EXT is '${got}', expected 'y'"
+  got=$(scripts/config --state DEBUG_INFO_BTF)
+  [ "$got" = "y" ] || fatal "sched_ext: CONFIG_DEBUG_INFO_BTF is '${got}', expected 'y'"
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -2569,6 +2725,11 @@ install_kernel() {
         log_info "Applying optimization profile: ${PROFILE}"
         apply_profile "$PROFILE"
       fi
+      # Explicit flags override the profile; --custom-config overrides both.
+      configure_hz
+      configure_bbr3
+      configure_binder
+      configure_sched_ext
       for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
@@ -2585,6 +2746,10 @@ install_kernel() {
       assert_cpu
       assert_lto
       assert_kernel_name
+      assert_hz
+      assert_bbr3
+      assert_binder
+      assert_sched_ext
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
