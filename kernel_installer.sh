@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086,SC2046,SC2005,SC2317
+# shellcheck disable=SC2221,SC2222,SC2181,SC2174,SC2086,SC2046,SC2005,SC2317,SC2329
 
 ## Author: Tommy Miland (@tmiland) - Copyright (c) 2025
 
@@ -2254,7 +2254,6 @@ kexec_new_kernel() {
 # Download and verify the pinned CachyOS source tarball. The CachyOS release
 # is signed by Peter Jung or Eric Naim; checkout runs use the bundled public
 # keys, piped runs fetch the same pinned fingerprints from keys.openpgp.org.
-# shellcheck disable=SC2329  # called indirectly through run_ok
 get_verified_cachyos_tarball() {
   local tar="linux-${LINUX_VER}.tar.gz"
   local asc="${tar}.asc"
