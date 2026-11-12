@@ -163,7 +163,7 @@ Usage:  kernel_installer.sh [options]
   --update               |-upd check for a verified script update
   --uninstall            |-u   uninstall kernel (default: running kernel; use -k for another)
 
-  Installed kernel version: 7.3.4  | Script version: 1.3.1
+  Installed kernel version: 7.3.4  | Script version: 1.4.0
 ```
 
 The versions shown are looked up live from kernel.org each time the script runs.

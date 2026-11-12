@@ -135,4 +135,4 @@ On the desktop, the named `7.3.4-cachyos-workstation-bore` kernel booted with `C
 
 The next items are sched_ext (which needs BTF/`pahole` and a userspace `scx` scheduler), and the remaining CachyOS kernel features that come with the base patchset: 500/600/750 Hz timer options, BBR3, Binder/Waydroid, and the hardware/MGLRU/I-O patches. BMQ, hardened, RT and AutoFDO are separate variants, not profile checkboxes.
 
-The work is currently in [PR #74](https://github.com/tmiland/kernel-installer/pull/74) on the kernel-installer repository. Feedback and test reports are welcome — especially from anyone running the `workstation` profile under a real LLM or Android build.
+The work is released as [v1.4.0](https://github.com/tmiland/kernel-installer/releases/tag/v1.4.0). Feedback and test reports are welcome — especially from anyone running the `workstation` profile under a real LLM or Android build.
