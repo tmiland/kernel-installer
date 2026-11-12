@@ -342,7 +342,7 @@ jobs:
           grep -q "Unknown optimization profile" /tmp/profile-unknown.log
           echo "Fast validation checks passed"
       - name: Build and install kernel ${{ env.KERNEL_VERSION }} with profile and custom config
-        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" --profile workstation --base-config none -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" --profile workstation --base-config none --binder --sched-ext -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
       - name: Show installer log on failure
         if: failure()
         run: |
@@ -354,7 +354,7 @@ jobs:
           set -- /boot/vmlinuz-*
           test "$#" -eq 1
           release="${1##*/vmlinuz-}"
-          test "$release" = "${KERNEL_VERSION}-vanilla-workstation"
+          test "$release" = "${KERNEL_VERSION}-vanilla-workstation-binder-sched-ext"
           cfg="/boot/config-${release}"
           dpkg -s "linux-image-${release}" >/dev/null
           test -f "$cfg"
@@ -371,7 +371,12 @@ jobs:
           grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
           grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' "$cfg"
           grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y$' "$cfg"
-          echo "Profile and custom config verified in $cfg"
+          # --binder and --sched-ext
+          grep -q '^CONFIG_ANDROID_BINDER_IPC=y$' "$cfg"
+          grep -q '^CONFIG_ANDROID_BINDERFS=y$' "$cfg"
+          grep -q '^CONFIG_SCHED_CLASS_EXT=y$' "$cfg"
+          grep -q '^CONFIG_DEBUG_INFO_BTF=y$' "$cfg"
+          echo "Profile, custom config, binder and sched_ext verified in $cfg"
       - name: Boot smoke test
         run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
@@ -394,9 +399,17 @@ jobs:
           - name: Debian 13 (trixie)
             image: debian:13
             slug: debian-13
+            extra_args: "--hz 600 --bbr3"
+            release: "7.3.4-cachyos-workstation-bore-lto-hz600-bbr3"
+            hz: "600"
+            tcp_cong: "bbr3"
           - name: Ubuntu 24.04 (noble)
             image: ubuntu:24.04
             slug: ubuntu-24.04
+            extra_args: ""
+            release: "7.3.4-cachyos-workstation-bore-lto"
+            hz: "1000"
+            tcp_cong: "bbr"
     container:
       image: ${{ matrix.image }}
     env:
@@ -408,7 +421,7 @@ jobs:
           apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
       - uses: actions/checkout@v4
       - name: Build and install CachyOS BORE kernel
-        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation --lto thin
+        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation --lto thin ${{ matrix.extra_args }}
       - name: Show installer log on failure
         if: failure()
         run: |
@@ -420,17 +433,23 @@ jobs:
           set -- /boot/vmlinuz-*
           test "$#" -eq 1
           release="${1##*/vmlinuz-}"
-          test "$release" = "7.3.4-cachyos-workstation-bore-lto"
+          test "$release" = "${{ matrix.release }}"
           cfg="/boot/config-${release}"
           test -f "$cfg"
           grep -q '^CONFIG_CACHY=y$' "$cfg"
           grep -q '^CONFIG_SCHED_BORE=y$' "$cfg"
           grep -q '^CONFIG_CC_IS_CLANG=y$' "$cfg"
           grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$cfg"
-          grep -q '^CONFIG_HZ=1000$' "$cfg"
+          grep -q "^CONFIG_HZ=${{ matrix.hz }}$" "$cfg"
+          grep -q "^CONFIG_HZ_${{ matrix.hz }}=y$" "$cfg"
           grep -q '^CONFIG_PREEMPT=y$' "$cfg"
           grep -q '^CONFIG_LRU_GEN=y$' "$cfg"
-          grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
+          grep -q "^CONFIG_DEFAULT_TCP_CONG=\"${{ matrix.tcp_cong }}\"$" "$cfg"
+          if [ "${{ matrix.tcp_cong }}" = "bbr3" ]; then
+            grep -q '^CONFIG_DEFAULT_BBR3=y$' "$cfg"
+          else
+            grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
+          fi
           grep -q '^CONFIG_CFS_BANDWIDTH=y$' "$cfg"
           echo "CachyOS BORE + workstation config verified in $cfg"
       - name: Boot smoke test
