@@ -63,6 +63,24 @@ KERNEL_KEYRING_FILE=src/keys/kernel.org.asc
 TORVALDS_FPR=ABAF11C65A2970B130ABE3C479BE3E4300411886
 GREGKH_FPR=647F28654894E3BD457199BE38DBBDC86092693E
 AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
+# CachyOS source + BORE pins. The source tree already carries the CachyOS
+# base patchset (CONFIG_CACHY); the BORE scheduler is an additional patch.
+# Bump these together with src/keys/cachyos.asc when moving to a new source.
+CACHYOS_VERSION=7.3.4
+CACHYOS_TAGREL=1
+CACHYOS_SRCNAME="cachyos-${CACHYOS_VERSION}-${CACHYOS_TAGREL}"
+CACHYOS_SOURCE_URL="https://github.com/CachyOS/linux/releases/download/${CACHYOS_SRCNAME}/${CACHYOS_SRCNAME}.tar.gz"
+CACHYOS_PKGBUILD_REV=8e308d0a3895dbc741381fb61b9a9a8603be793d
+CACHYOS_CONFIG_URL="https://raw.githubusercontent.com/CachyOS/linux-cachyos/${CACHYOS_PKGBUILD_REV}/linux-cachyos/config"
+CACHYOS_CONFIG_SHA256=81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92951927
+CACHYOS_PATCHES_REV=21d721415790e6717b2ece16e82e08eb98d16c00
+CACHYOS_BORE_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-bore-cachy.patch"
+CACHYOS_BORE_PATCH_SHA256=d2eaa8e8dbf1f56bfb304f8b437a7dc30a65408f90a93701367baf8adc2173b4
+CACHYOS_KEYRING_FILE=src/keys/cachyos.asc
+CACHYOS_KEY_FINGERPRINTS=(
+  E18447AC260021D31F3FF6C4C8A2A4774B8B63C4
+  E8B9AA39F054E30E8290D492C3C4820857F654FE
+)
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
@@ -81,6 +99,10 @@ VERBOSE=${VERBOSE:-0}
 ENABLE_DEBUG_INFO=${ENABLE_DEBUG_INFO:-0}
 # Low latency (Default off)
 LOWLATENCY=${LOWLATENCY:-0}
+# Optimization profile (empty = no profile)
+PROFILE=${PROFILE:-}
+# Base config for profile builds: running, a path, or none (empty = none)
+BASE_CONFIG=${BASE_CONFIG:-}
 # get-verified-tarball (Default: yes; set GET_VERIFIED_TARBALL=0 to skip verification)
 GET_VERIFIED_TARBALL=${GET_VERIFIED_TARBALL:-1}
 # Show banners (Default: yes)
@@ -134,6 +156,17 @@ SLIB_SHA256="694784527d354eb264df24e399a693124fe0df6cb5037a7af218677772cf47c5"
 SLIB_URL=https://raw.githubusercontent.com/$REPO_NAME/$SLIB_REV/src/slib.sh
 # Set default configuration target
 CONFIG_OPTION=${CONFIG_OPTION:-olddefconfig}
+# Kernel source: vanilla (kernel.org) or cachyos (pinned CachyOS source)
+SOURCE=${SOURCE:-vanilla}
+# Scheduler selection for the CachyOS source: eevdf or bore
+KERNEL_SCHED=${KERNEL_SCHED:-eevdf}
+# CPU tuning: generic (portable), native, zen4, x86-64-v3, x86-64-v4
+CPU=${CPU:-generic}
+# Link-time optimization: none, thin, or full (requires clang/lld)
+LTO=${LTO:-none}
+MAKE_LLVM=${MAKE_LLVM:-}
+# Optional custom localversion suffix (without or with a leading hyphen)
+KERNEL_TAG=${KERNEL_TAG:-}
 
 # Include functions
 # Only trust src/slib.sh next to the script when the script itself is a file.
@@ -227,8 +260,8 @@ log_diagnostics() {
   done
   log_debug "Diagnostics: ${SCRIPT_FILENAME:-kernel_installer.sh} ${VERSION}, args: ${SCRIPT_ARGS}"
   log_debug "Diagnostics: distro: ${DISTRO} (${DISTRO_GROUP}), running kernel: $(uname -srm)"
-  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, config: ${CONFIG_OPTION}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
-  log_debug "Diagnostics: running kernel's config (base for olddefconfig/oldconfig): $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none, so arch defconfig is the base")"
+  log_debug "Diagnostics: target: ${LINUX_VER_NAME} ${LINUX_VER}, source: ${SOURCE}, sched: ${KERNEL_SCHED}, cpu: ${CPU}, lto: ${LTO}, tag: ${KERNEL_TAG:-auto}, config: ${CONFIG_OPTION}, profile: ${PROFILE:-none}, base config: ${BASE_CONFIG:-none}, custom directives: ${#CUSTOM_CONFIG_OPTIONS[@]}, verified tarball: ${GET_VERIFIED_TARBALL}, jobs: ${NPROC}"
+  log_debug "Diagnostics: running kernel's config: $(ls /boot/config-"$(uname -r)" 2>/dev/null || echo "none")"
   log_debug "Diagnostics: $(gcc --version 2>/dev/null | head -n 1 || echo 'gcc: not found'); $(make --version 2>/dev/null | head -n 1); $(ld --version 2>/dev/null | head -n 1)"
   log_debug "Diagnostics: memory: $(awk '/^MemTotal:|^MemAvailable:/ {printf "%s %d MiB  ", $1, $2 / 1024}' /proc/meminfo 2>/dev/null)"
   log_debug "Diagnostics: disk free for ${INSTALL_DIR}: $(df -Pk "$dir" 2>/dev/null | awk 'NR == 2 {printf "%d MiB on %s", $4 / 1024, $6}')"
@@ -400,7 +433,10 @@ prepare_install_dir() {
   local dir=$INSTALL_DIR parent parent_uid caller_uid mode
   parent=$(dirname -- "$dir")
   if [ ! -d "$parent" ]; then
-    if ! mkdir -p -- "$parent"; then
+    # Create the parent private from the start. With the default root umask
+    # 002 a plain `mkdir -p` would create 0775, which the check below then
+    # rejects (the installer would create the directory and refuse it).
+    if ! mkdir -p -m 0700 -- "$parent"; then
       fatal "Could not create install directory parent $parent"
     fi
   fi
@@ -412,7 +448,7 @@ prepare_install_dir() {
   # A non-sticky group/other-writable parent lets another user rename or
   # replace the build folder; sticky shared folders (/tmp, /var/tmp) do not.
   if (( (8#$mode & 0022) != 0 && (8#$mode & 01000) == 0 )); then
-    fatal "Install directory parent $parent is writable by group or others and is not sticky; choose a directory only you (and root) can write to."
+    fatal "Install directory parent $parent is writable by group or others and is not sticky; run: chmod 700 $parent (or choose a private --dir)"
   fi
   parent_uid=$(stat -c '%u' -- "$parent" 2>/dev/null) ||
     fatal "Could not read the owner of $parent."
@@ -518,9 +554,43 @@ installed_kernel_pkg() {
 # yet, no Makefile).
 built_kernelrelease() {
   local release
-  release=$(cd "$1" 2>/dev/null && make -s kernelrelease 2>/dev/null) || return 1
+  # kernelrelease is a no-sync-config target: it runs scripts/setlocalversion,
+  # which reads include/config/auto.conf but never refreshes it from .config.
+  # The profile and --kernel-tag edits happen after the last syncconfig, so a
+  # stale or missing auto.conf answers without the localversion (7.3.4 instead
+  # of 7.3.4-cachyos-workstation-bore-lto) or fails outright. Force a resync
+  # first; the tree then names exactly the release mkdebian and kernel.spec
+  # used for the packages (#74).
+  release=$(
+    cd "$1" 2>/dev/null || exit 1
+    touch .config 2>/dev/null || exit 1
+    # shellcheck disable=SC2086
+    ${MAKE_LLVM:+$MAKE_LLVM }make -s syncconfig >/dev/null 2>&1 || exit 1
+    # shellcheck disable=SC2086
+    ${MAKE_LLVM:+$MAKE_LLVM }make -s kernelrelease 2>/dev/null
+  ) || return 1
   [[ -n $release ]] || return 1
   printf '%s\n' "$release"
+}
+
+# Release from the built image package, linux-image-<release>_<version>_<arch>.deb.
+# mkdebian names the package after the release the configured tree built, so the
+# package itself is the ground truth for the install path (#74).
+built_deb_release() {
+  local dir=${1:-.} deb release
+  for deb in "$dir"/linux-image-*.deb; do
+    [ -e "$deb" ] || continue
+    release=${deb##*/}
+    # mkdebian names the debug package linux-image-<release>-dbg; it carries a
+    # different suffix and must not win the release lookup.
+    case $release in *-dbg_*) continue ;; esac
+    release=${release#linux-image-}
+    release=${release%%_*}
+    [ -n "$release" ] || continue
+    printf '%s\n' "$release"
+    return 0
+  done
+  return 1
 }
 
 # Kernel release derived from the top-level Makefile,
@@ -636,6 +706,328 @@ clear_missing_cert_keys() {
     fi
   done
 }
+
+# --- Optimization profiles ---
+# Profiles are config deltas applied after the kernel's base configuration.
+# They deliberately avoid symbols that need an out-of-tree patchset (BORE,
+# CACHY) or DEBUG_INFO_BTF (sched_ext); those are separate opt-ins.
+profile_cfg() {
+  log_debug "Profile ${PROFILE}: scripts/config $*"
+  scripts/config "$@"
+}
+
+profile_kernel_ge() {
+  [ "$(versionToInt "$1")" -ge "$(versionToInt "$2")" ]
+}
+
+profile_set_hz() {
+  local hz=$1 other
+  profile_cfg --set-val HZ "$hz"
+  profile_cfg --enable "HZ_${hz}"
+  for other in 100 250 300 1000; do
+    [ "$other" = "$hz" ] || profile_cfg --disable "HZ_${other}"
+  done
+}
+
+profile_set_preempt_full() {
+  profile_cfg --enable PREEMPT_DYNAMIC
+  profile_cfg --enable PREEMPT
+  profile_cfg --disable PREEMPT_LAZY
+  profile_cfg --disable PREEMPT_VOLUNTARY
+  profile_cfg --disable PREEMPT_NONE
+}
+
+profile_set_preempt_relaxed() {
+  local lazy_state
+  profile_cfg --enable PREEMPT_DYNAMIC
+  profile_cfg --disable PREEMPT
+  lazy_state=$(scripts/config --state PREEMPT_LAZY)
+  if [ "$lazy_state" != "undef" ]; then
+    profile_cfg --disable PREEMPT_VOLUNTARY
+    profile_cfg --disable PREEMPT_NONE
+    profile_cfg --enable PREEMPT_LAZY
+  else
+    profile_cfg --disable PREEMPT_LAZY
+    profile_cfg --disable PREEMPT_NONE
+    profile_cfg --enable PREEMPT_VOLUNTARY
+  fi
+}
+
+profile_set_thp_madvise() {
+  profile_cfg --enable TRANSPARENT_HUGEPAGE
+  profile_cfg --enable TRANSPARENT_HUGEPAGE_MADVISE
+  profile_cfg --disable TRANSPARENT_HUGEPAGE_ALWAYS
+}
+
+profile_set_lru_gen() {
+  if profile_kernel_ge "$LINUX_VER" 6.1; then
+    profile_cfg --enable LRU_GEN
+    profile_cfg --enable LRU_GEN_ENABLED
+  else
+    log_info "LRU_GEN is not available before Linux 6.1; skipping"
+  fi
+}
+
+profile_set_bbr() {
+  profile_cfg --enable TCP_CONG_BBR
+  profile_cfg --enable NET_SCH_FQ
+}
+
+profile_set_bbr_default() {
+  profile_cfg --disable DEFAULT_CUBIC
+  profile_cfg --enable DEFAULT_BBR
+  profile_cfg --set-str DEFAULT_TCP_CONG bbr
+}
+
+profile_set_o2() {
+  profile_cfg --enable CC_OPTIMIZE_FOR_PERFORMANCE
+  profile_cfg --disable CC_OPTIMIZE_FOR_PERFORMANCE_O3
+}
+
+profile_set_cgroup() {
+  profile_cfg --enable PSI
+  profile_cfg --enable CGROUPS
+  profile_cfg --enable MEMCG
+  profile_cfg --enable BPF_SYSCALL
+  profile_cfg --enable BPF_JIT
+  profile_cfg --enable CGROUP_BPF
+  profile_cfg --enable FAIR_GROUP_SCHED
+  profile_cfg --enable CFS_BANDWIDTH
+  profile_cfg --enable SCHED_AUTOGROUP
+}
+
+profile_common() {
+  profile_set_thp_madvise
+  profile_set_lru_gen
+  profile_cfg --enable PSI
+  profile_cfg --enable ZRAM
+  profile_set_bbr
+}
+
+# Balanced interactive desktop: low timer latency, full preemption, MGLRU,
+# THP madvise, BBR and O3 (the CachyOS-style compiler choice).
+profile_desktop() {
+  profile_common
+  profile_set_hz 1000
+  profile_set_preempt_full
+  profile_set_o2
+}
+
+# Build-heavy interactive desktop (LLM/Android builds): the desktop profile
+# plus the cgroup knobs needed to keep builds in their own slice, and BBR as
+# the default congestion control.
+profile_workstation() {
+  profile_desktop
+  profile_set_cgroup
+  profile_set_bbr_default
+}
+
+# Same timer/scheduler trade-off as desktop; kept separate so a gaming profile
+# can grow scheduler-specific options without changing daily-driver defaults.
+profile_gaming() {
+  profile_desktop
+}
+
+# Throughput server: 250 Hz, relaxed preemption, O2, BBR default, and the
+# group-scheduling knobs systemd needs for per-service CPU limits.
+profile_server() {
+  profile_common
+  profile_set_hz 250
+  profile_set_preempt_relaxed
+  profile_set_o2
+  profile_set_cgroup
+  profile_cfg --set-val NR_CPUS 256
+  profile_set_bbr_default
+}
+
+# Battery/thermal profile: 300 Hz, relaxed preemption, schedutil, P-state,
+# the energy model, MGLRU and zram-friendly memory defaults.
+profile_laptop() {
+  profile_common
+  profile_set_hz 300
+  profile_set_preempt_relaxed
+  profile_set_o2
+  profile_cfg --enable CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+  profile_cfg --enable X86_AMD_PSTATE
+  profile_cfg --enable X86_INTEL_PSTATE
+  profile_cfg --enable ENERGY_MODEL
+}
+
+# Legacy --lowlatency behavior. This is low-latency, not PREEMPT_RT.
+profile_lowlatency() {
+  profile_set_hz 1000
+  profile_set_preempt_full
+  profile_cfg --enable LATENCYTOP
+  profile_cfg --disable COMEDI_TESTS_EXAMPLE
+  profile_cfg --disable COMEDI_TESTS_NI_ROUTES
+  profile_cfg --set-val TEST_DIV64 m
+}
+
+profile_is_valid() {
+  case "$1" in
+    desktop | workstation | gaming | server | laptop | lowlatency) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+build_kernel_tag() {
+  [ -n "$KERNEL_TAG" ] && return 0
+  local tag=""
+  if [ "$SOURCE" = "cachyos" ]; then
+    tag="-cachyos"
+  elif [ -n "$PROFILE" ]; then
+    tag="-vanilla"
+  fi
+  [ -n "$PROFILE" ] && tag+="-$PROFILE"
+  [ "$KERNEL_SCHED" != "eevdf" ] && tag+="-$KERNEL_SCHED"
+  [ "$CPU" != "generic" ] && tag+="-$CPU"
+  case "$LTO" in
+    thin) tag+="-lto" ;;
+    full) tag+="-ltofull" ;;
+  esac
+  KERNEL_TAG="$tag"
+}
+
+apply_profile() {
+  case "$1" in
+    desktop) profile_desktop ;;
+    workstation) profile_workstation ;;
+    gaming) profile_gaming ;;
+    server) profile_server ;;
+    laptop) profile_laptop ;;
+    lowlatency) profile_lowlatency ;;
+    *) fatal "Unknown optimization profile: $1" ;;
+  esac
+}
+
+# Fail the build if a profile symbol did not survive olddefconfig. This is
+# what catches a profile that was silently dropped by a Kconfig dependency.
+profile_assert() {
+  local spec sym want got
+  for spec in "$@"; do
+    sym=${spec%%=*}
+    want=${spec#*=}
+    got=$(scripts/config --state "$sym")
+    if [ "$got" != "$want" ]; then
+      fatal "Profile ${PROFILE}: CONFIG_${sym} is '${got}', expected '${want}'"
+    fi
+  done
+}
+
+assert_profile() {
+  local common=(
+    TRANSPARENT_HUGEPAGE_MADVISE=y
+    TRANSPARENT_HUGEPAGE_ALWAYS=n
+    PSI=y
+    ZRAM=y
+    TCP_CONG_BBR=y
+    NET_SCH_FQ=y
+  )
+  if profile_kernel_ge "$LINUX_VER" 6.1; then
+    common+=(LRU_GEN=y LRU_GEN_ENABLED=y)
+  fi
+
+  case "$1" in
+    desktop | gaming)
+      profile_assert "${common[@]}" \
+        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y
+      ;;
+    workstation)
+      profile_assert "${common[@]}" \
+        HZ=1000 HZ_1000=y PREEMPT=y CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
+        DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+      ;;
+    server)
+      profile_assert "${common[@]}" \
+        HZ=250 HZ_250=y PREEMPT=n \
+        CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        MEMCG=y CGROUP_BPF=y FAIR_GROUP_SCHED=y CFS_BANDWIDTH=y \
+        NR_CPUS=256 DEFAULT_BBR=y DEFAULT_TCP_CONG=bbr
+      ;;
+    laptop)
+      profile_assert "${common[@]}" \
+        HZ=300 HZ_300=y PREEMPT=n \
+        CC_OPTIMIZE_FOR_PERFORMANCE=y \
+        CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y X86_AMD_PSTATE=y \
+        X86_INTEL_PSTATE=y ENERGY_MODEL=y
+      ;;
+    lowlatency)
+      profile_assert \
+        HZ=1000 HZ_1000=y PREEMPT=y LATENCYTOP=y
+      ;;
+    *)
+      fatal "Unknown optimization profile: $1"
+      ;;
+  esac
+}
+
+list_profiles() {
+  cat <<'EOF'
+desktop       Balanced interactive desktop: HZ 1000, full preempt, MGLRU, THP madvise, BBR, O2
+workstation   Build-heavy interactive desktop: desktop + PSI/cgroup CPU limits + BBR default
+gaming        Low-latency games: desktop timer/preempt settings, O2
+server        Throughput server: HZ 250, relaxed preempt, MGLRU, BBR default, O2
+laptop        Battery/thermal: HZ 300, relaxed preempt, schedutil/P-state, energy model, O2
+lowlatency    Legacy low-latency profile: HZ 1000, full preempt, LATENCYTOP (not PREEMPT_RT)
+EOF
+}
+
+# Copy the base config before the make target runs. Profiles default to the
+# running kernel's config so the resulting kernel keeps the hardware support
+# the machine already has; --base-config none keeps the historical behavior.
+prepare_base_config() {
+  [ -n "$BASE_CONFIG" ] || return 0
+  case "$BASE_CONFIG" in
+    none) return 0 ;;
+    cachyos)
+      if [ "$SOURCE" != "cachyos" ]; then
+        fatal "--base-config cachyos requires --source cachyos"
+        return 1
+      fi
+      if ! curl -fsSL --retry 3 -o .config "$CACHYOS_CONFIG_URL"; then
+        fatal "Could not download the pinned CachyOS config"
+        return 1
+      fi
+      if ! printf '%s  %s\n' "$CACHYOS_CONFIG_SHA256" ".config" | sha256sum -c - >/dev/null 2>&1; then
+        fatal "CachyOS config checksum mismatch (expected ${CACHYOS_CONFIG_SHA256})"
+        return 1
+      fi
+      log_info "Using pinned CachyOS kernel config"
+      ;;
+    running)
+      local src
+      src="/boot/config-$(uname -r)"
+      if [ ! -f "$src" ]; then
+        fatal "Base config ${src} not found; use --base-config /path or --base-config none"
+        return 1
+      fi
+      if ! cp -f "$src" .config; then
+        fatal "Could not copy ${src} to .config"
+        return 1
+      fi
+      log_info "Using base kernel config: ${src}"
+      ;;
+    *)
+      if [ ! -f "$BASE_CONFIG" ]; then
+        fatal "Base config not found: ${BASE_CONFIG}"
+        return 1
+      fi
+      if ! cp -f "$BASE_CONFIG" .config; then
+        fatal "Could not copy ${BASE_CONFIG} to .config"
+        return 1
+      fi
+      log_info "Using base kernel config: ${BASE_CONFIG}"
+      ;;
+  esac
+
+  case "$CONFIG_OPTION" in
+    defconfig | savedefconfig | allnoconfig | allyesconfig | allmodconfig | alldefconfig | randconfig | tinyconfig)
+      log_warning "Base config was copied, but --config ${CONFIG_OPTION} creates a new config and will replace it."
+      ;;
+  esac
+}
+# --- End optimization profiles ---
 
 changelog() {
   curl -s https://cdn.kernel.org/pub/linux/kernel/v"$(echo "$LINUX_VER" | cut -c1)".x/ChangeLog-${LINUX_VER} | less
@@ -882,6 +1274,13 @@ update_updater () {
           GET_VERIFIED_TARBALL="$GET_VERIFIED_TARBALL" \
           ENABLE_DEBUG_INFO="$ENABLE_DEBUG_INFO" \
           LOWLATENCY="$LOWLATENCY" \
+          PROFILE="$PROFILE" \
+          BASE_CONFIG="$BASE_CONFIG" \
+          SOURCE="$SOURCE" \
+          KERNEL_SCHED="$KERNEL_SCHED" \
+          CPU="$CPU" \
+          LTO="$LTO" \
+          KERNEL_TAG="$KERNEL_TAG" \
           BANNERS="$BANNERS" \
           LIST_INSTALLED="$LIST_INSTALLED" \
           "${SCRIPT_DIR}/${SCRIPT_FILENAME}" "${reexec_args[@]}"
@@ -910,6 +1309,14 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--kexec                |-x${NORMAL}   load new kernel without reboot"
   printf "%s\\n" "  ${YELLOW}--config               |-c${NORMAL}   set configuration target"
   printf "%s\\n" "  ${YELLOW}--custom-config        |-cc${NORMAL}  set custom configuration directive, can be used multiple times"
+  printf "%s\\n" "  ${YELLOW}--profile              |-p${NORMAL}   optimization profile (see --list-profiles)"
+  printf "%s\\n" "  ${YELLOW}--list-profiles        |-lp${NORMAL}  list optimization profiles and exit"
+  printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, cachyos, or none"
+  printf "%s\\n" "  ${YELLOW}--source               |${NORMAL}      kernel source: vanilla (kernel.org) or cachyos (pinned)"
+  printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
+  printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
+  printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
+  printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
   printf "%s\\n" "  ${YELLOW}--nproc                |-n${NORMAL}   set the number of processing units to use"
@@ -988,6 +1395,68 @@ while [[ $# -gt 0 ]]; do
       CUSTOM_CONFIG_OPTIONS+=("$2")
       shift 2
       ;;
+    --profile | -p)
+      require_arg "$1" "${2:-}"
+      if ! profile_is_valid "$2"; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown optimization profile: $2 (use --list-profiles)"
+      fi
+      PROFILE="$2"
+      shift 2
+      ;;
+    --list-profiles | -lp)
+      list_profiles
+      exit 0
+      ;;
+    --base-config | -bc)
+      require_arg "$1" "${2:-}"
+      if [ "$2" != "running" ] && [ "$2" != "none" ] && [ "$2" != "cachyos" ] && [ ! -f "$2" ]; then
+        fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Base config not found: $2"
+      fi
+      if [ "$2" = "running" ] || [ "$2" = "none" ] || [ "$2" = "cachyos" ]; then
+        BASE_CONFIG="$2"
+      else
+        # Resolve now, before install_kernel cd's into the kernel tree.
+        BASE_CONFIG="$(realpath -m -- "$2")"
+      fi
+      shift 2
+      ;;
+    --source)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        vanilla | cachyos) SOURCE="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown kernel source: $2 (vanilla or cachyos)" ;;
+      esac
+      shift 2
+      ;;
+    --sched)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        eevdf | bore) KERNEL_SCHED="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown scheduler: $2 (eevdf or bore)" ;;
+      esac
+      shift 2
+      ;;
+    --cpu)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        generic | native | zen4 | x86-64-v3 | x86-64-v4) CPU="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown CPU tuning: $2 (generic, native, zen4, x86-64-v3, x86-64-v4)" ;;
+      esac
+      shift 2
+      ;;
+    --lto)
+      require_arg "$1" "${2:-}"
+      case "$2" in
+        none | thin | full) LTO="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown LTO mode: $2 (none, thin, full)" ;;
+      esac
+      shift 2
+      ;;
+    --kernel-tag)
+      require_arg "$1" "${2:-}"
+      KERNEL_TAG="$2"
+      shift 2
+      ;;
     --kexec | -x)
       shift
       KEXEC=1
@@ -1045,6 +1514,77 @@ done
 if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
   set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 fi
+
+if [ "$KERNEL_SCHED" = "bore" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched bore requires --source cachyos"
+fi
+
+if [ "$SOURCE" = "cachyos" ]; then
+  if [ "$VER_SELECTED" = "1" ] && [ "$LINUX_VER" != "$CACHYOS_VERSION" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --source cachyos is pinned to ${CACHYOS_VERSION}; remove the version option or use ${CACHYOS_VERSION}"
+  fi
+  LINUX_VER="$CACHYOS_VERSION"
+  LINUX_VER_NAME="CachyOS"
+  VER_SELECTED=1
+fi
+
+if [ "$BASE_CONFIG" = "cachyos" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --base-config cachyos requires --source cachyos"
+fi
+
+if [ -n "$KERNEL_TAG" ]; then
+  KERNEL_TAG=${KERNEL_TAG#-}
+  case "$KERNEL_TAG" in
+    '' | *[!a-z0-9+.-]*)
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --kernel-tag must use lowercase letters, digits, '+', '.', or '-'"
+      ;;
+  esac
+  KERNEL_TAG="-${KERNEL_TAG}"
+fi
+
+# --uninstall without -k targets the running kernel, which may have a
+# localversion suffix.
+if [ "$mode" = "uninstall" ] && [ "$VER_SELECTED" = "0" ]; then
+  LINUX_VER=$(uname -r)
+  LINUX_VER_NAME="Running"
+  VER_SELECTED=1
+fi
+
+case "$CPU" in
+  zen4 | x86-64-v3 | x86-64-v4)
+    [ "$SOURCE" = "cachyos" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --cpu $CPU requires --source cachyos"
+    ;;
+esac
+
+if [ "$LTO" != "none" ]; then
+  MAKE_LLVM="LLVM=1 LLVM_IAS=1"
+else
+  MAKE_LLVM=""
+fi
+
+# --lowlatency is kept as an alias for --profile lowlatency. Refuse the
+# combination instead of guessing which one should win.
+if [ "$LOWLATENCY" = "1" ]; then
+  if [ -n "$PROFILE" ] && [ "$PROFILE" != "lowlatency" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --lowlatency cannot be combined with --profile $PROFILE"
+  fi
+  PROFILE=lowlatency
+  LOWLATENCY=0
+fi
+
+# Profiles are deltas on a real hardware config. CachyOS source builds use
+# the pinned CachyOS config by default; vanilla profiles use the running
+# kernel's config. --base-config none keeps the historical arch-defconfig
+# behavior.
+if [ -z "$BASE_CONFIG" ]; then
+  if [ "$SOURCE" = "cachyos" ]; then
+    BASE_CONFIG=cachyos
+  elif [ -n "$PROFILE" ]; then
+    BASE_CONFIG=running
+  fi
+fi
+
+build_kernel_tag
 
 # Custom directives must invoke scripts/config; anything else (e.g. a raw
 # CONFIG_X=y assignment) would be silently ignored by eval
@@ -1209,7 +1749,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -1232,7 +1772,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
     # boot entry at install time. gawk: see the Debian list above.
     # elfutils-devel provides libdw, required by the kernel.spec
     # BuildRequires check on newer mainline kernels.
-    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby"
+    INSTALL_PKGS="wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make patch openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby"
   # elif [[ $DISTRO_GROUP == "Arch" ]]; then
   #   SUDO="sudo"
   #   UPDATE="pacman -Syu"
@@ -1246,6 +1786,11 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
 else
   echo -e "${RED}${BALLOT_X} Error: Sorry, your OS is not supported.${NORMAL}"
   exit 1;
+fi
+
+if [ "$LTO" != "none" ]; then
+  # LTO needs clang/LLD; install them only when requested.
+  INSTALL_PKGS+=" clang lld llvm"
 fi
 
 case "$DEFAULT_COMPRESSION" in
@@ -1632,6 +2177,227 @@ kexec_new_kernel() {
   return 0
 }
 
+# Download and verify the pinned CachyOS source tarball. The CachyOS release
+# is signed by Peter Jung or Eric Naim; checkout runs use the bundled public
+# keys, piped runs fetch the same pinned fingerprints from keys.openpgp.org.
+get_verified_cachyos_tarball() {
+  local tar="linux-${LINUX_VER}.tar.gz"
+  local asc="${tar}.asc"
+  local gpg_root home valid fpr ok=0 status
+  local gpg_bin
+  gpg_bin=$(command -v gpg || command -v gpg2 || true)
+  if [ -z "$gpg_bin" ]; then
+    log_debug "Installing gnupg for CachyOS source verification"
+    # shellcheck disable=SC2086
+    ${INSTALL} gnupg >/dev/null 2>&1 || { verify_fail "Failed to install gnupg"; return 1; }
+    gpg_bin=$(command -v gpg || command -v gpg2 || true)
+  fi
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$tar" "$CACHYOS_SOURCE_URL" 2>/dev/null ||
+    { verify_fail "Failed to download the CachyOS source tarball"; return 1; }
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$asc" "${CACHYOS_SOURCE_URL}.asc" 2>/dev/null ||
+    { verify_fail "Failed to download the CachyOS source signature"; return 1; }
+
+  gpg_root=$(mktemp -d "${GPG_TMPDIR:-/tmp}/cachyos-gpg.XXXXXXXX") ||
+    { verify_fail "Could not create a temporary GnuPG directory"; return 1; }
+  home="${gpg_root}/home"
+  mkdir -m 0700 "$home" || { rm -rf "$gpg_root"; verify_fail "Could not create a GnuPG home"; return 1; }
+
+  if [ -n "${self:-}" ] && [ -f "${SCRIPT_DIR}/${CACHYOS_KEYRING_FILE}" ]; then
+    if ! "$gpg_bin" --batch --homedir "$home" --import "${SCRIPT_DIR}/${CACHYOS_KEYRING_FILE}" >/dev/null 2>&1; then
+      rm -rf "$gpg_root"
+      verify_fail "Could not import the bundled CachyOS signing keys"
+      return 1
+    fi
+  else
+    for fpr in "${CACHYOS_KEY_FINGERPRINTS[@]}"; do
+      # shellcheck disable=SC2086
+      if ! ${CURLBIN:-curl} -fsSL --retry 3 -o "${gpg_root}/${fpr}.asc" \
+        "https://keys.openpgp.org/vks/v1/by-fingerprint/${fpr}" 2>/dev/null ||
+        ! "$gpg_bin" --batch --homedir "$home" --import "${gpg_root}/${fpr}.asc" >/dev/null 2>&1; then
+        rm -rf "$gpg_root"
+        verify_fail "Could not fetch/import CachyOS key ${fpr}"
+        return 1
+      fi
+    done
+  fi
+
+  if ! status=$("$gpg_bin" --batch --homedir "$home" --status-fd 1 \
+    --verify "$asc" "$tar" 2>/dev/null); then
+    rm -rf "$gpg_root"
+    verify_fail "CachyOS source signature verification failed"
+    return 1
+  fi
+  valid=$(printf '%s\n' "$status" | awk '/^\[GNUPG:\] VALIDSIG/{print $3; exit}')
+  for fpr in "${CACHYOS_KEY_FINGERPRINTS[@]}"; do
+    [ "$valid" = "$fpr" ] && ok=1
+  done
+  rm -rf "$gpg_root"
+  if [ "$ok" -ne 1 ]; then
+    verify_fail "CachyOS source is signed by an unexpected key: ${valid:-unknown}"
+    return 1
+  fi
+  TARGET="${PWD}/${tar}"
+  log_debug "Verified CachyOS source with key ${valid}"
+  return 0
+}
+
+apply_cachyos_bore_patch() {
+  [ "$SOURCE" = "cachyos" ] && [ "$KERNEL_SCHED" = "bore" ] || return 0
+  local patch="cachyos-bore.patch"
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$CACHYOS_BORE_PATCH_URL" 2>/dev/null ||
+    fatal "Could not download the BORE scheduler patch"
+  if ! printf '%s  %s\n' "$CACHYOS_BORE_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+    fatal "BORE scheduler patch checksum mismatch (expected ${CACHYOS_BORE_PATCH_SHA256})"
+  fi
+  if ! patch -p1 < "$patch" >/dev/null; then
+    fatal "BORE scheduler patch failed to apply to the CachyOS source"
+  fi
+  log_success "BORE scheduler patch applied"
+  return 0
+}
+
+configure_cachyos_source() {
+  [ "$SOURCE" = "cachyos" ] || return 0
+  scripts/config --enable CACHY
+  if [ "$KERNEL_SCHED" = "bore" ]; then
+    scripts/config --enable SCHED_BORE
+  else
+    scripts/config --disable SCHED_BORE
+  fi
+}
+
+assert_cachyos_source() {
+  [ "$SOURCE" = "cachyos" ] || return 0
+  local got
+  got=$(scripts/config --state CACHY)
+  [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_CACHY is '${got}', expected 'y'"
+  if [ "$KERNEL_SCHED" = "bore" ]; then
+    got=$(scripts/config --state SCHED_BORE)
+    [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_SCHED_BORE is '${got}', expected 'y'"
+  fi
+}
+
+configure_cpu() {
+  case "$CPU" in
+    generic)
+      if [ "$SOURCE" = "cachyos" ]; then
+        scripts/config --enable GENERIC_CPU
+        scripts/config --set-val X86_64_VERSION 1
+        scripts/config --disable X86_NATIVE_CPU
+        scripts/config --disable MZEN4
+      fi
+      ;;
+    native)
+      scripts/config --enable X86_NATIVE_CPU
+      scripts/config --disable GENERIC_CPU
+      scripts/config --disable MZEN4
+      ;;
+    zen4)
+      scripts/config --enable MZEN4
+      scripts/config --disable GENERIC_CPU
+      scripts/config --disable X86_NATIVE_CPU
+      ;;
+    x86-64-v3 | x86-64-v4)
+      scripts/config --enable GENERIC_CPU
+      scripts/config --disable X86_NATIVE_CPU
+      scripts/config --disable MZEN4
+      scripts/config --set-val X86_64_VERSION "${CPU##*-v}"
+      ;;
+  esac
+}
+
+assert_cpu() {
+  local got
+  case "$CPU" in
+    generic)
+      [ "$SOURCE" = "cachyos" ] || return 0
+      got=$(scripts/config --state GENERIC_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning generic: CONFIG_GENERIC_CPU is '${got}', expected 'y'"
+      got=$(scripts/config --state X86_64_VERSION)
+      [ "$got" = "1" ] || fatal "CPU tuning generic: CONFIG_X86_64_VERSION is '${got}', expected '1'"
+      ;;
+    native)
+      got=$(scripts/config --state X86_NATIVE_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning native: CONFIG_X86_NATIVE_CPU is '${got}', expected 'y'"
+      ;;
+    zen4)
+      got=$(scripts/config --state MZEN4)
+      [ "$got" = "y" ] || fatal "CPU tuning zen4: CONFIG_MZEN4 is '${got}', expected 'y'"
+      ;;
+    x86-64-v3 | x86-64-v4)
+      got=$(scripts/config --state GENERIC_CPU)
+      [ "$got" = "y" ] || fatal "CPU tuning ${CPU}: CONFIG_GENERIC_CPU is '${got}', expected 'y'"
+      got=$(scripts/config --state X86_64_VERSION)
+      [ "$got" = "${CPU##*-v}" ] || fatal "CPU tuning ${CPU}: CONFIG_X86_64_VERSION is '${got}', expected '${CPU##*-v}'"
+      ;;
+  esac
+}
+
+check_dkms_release() {
+  local release=$1 status
+  command -v dkms >/dev/null 2>&1 || return 0
+  status=$(dkms status -k "$release" 2>/dev/null || true)
+  if [ -z "$status" ]; then
+    log_warning "No DKMS modules are built for ${release}; run: dkms autoinstall -k ${release}"
+    return 0
+  fi
+  printf '%s\n' "$status" | while IFS= read -r line; do
+    log_info "DKMS: ${line}"
+  done
+}
+
+configure_kernel_name() {
+  [ -n "$KERNEL_TAG" ] || return 0
+  scripts/config --set-str LOCALVERSION "$KERNEL_TAG"
+  scripts/config --disable LOCALVERSION_AUTO
+}
+
+assert_kernel_name() {
+  [ -n "$KERNEL_TAG" ] || return 0
+  local got
+  got=$(scripts/config --state LOCALVERSION)
+  [ "$got" = "$KERNEL_TAG" ] || fatal "Kernel name: CONFIG_LOCALVERSION is '${got}', expected '${KERNEL_TAG}'"
+  got=$(scripts/config --state LOCALVERSION_AUTO)
+  [ "$got" = "n" ] || fatal "Kernel name: CONFIG_LOCALVERSION_AUTO is '${got}', expected 'n'"
+}
+
+configure_lto() {
+  case "$LTO" in
+    none)
+      scripts/config --enable LTO_NONE
+      scripts/config --disable LTO_CLANG_THIN
+      scripts/config --disable LTO_CLANG_FULL
+      ;;
+    thin)
+      scripts/config --enable LTO_CLANG_THIN
+      scripts/config --disable LTO_CLANG_FULL
+      scripts/config --disable LTO_NONE
+      ;;
+    full)
+      scripts/config --enable LTO_CLANG_FULL
+      scripts/config --disable LTO_CLANG_THIN
+      scripts/config --disable LTO_NONE
+      ;;
+  esac
+}
+
+assert_lto() {
+  [ "$LTO" = "none" ] && return 0
+  local got
+  got=$(scripts/config --state CC_IS_CLANG)
+  [ "$got" = "y" ] || fatal "LTO ${LTO}: CONFIG_CC_IS_CLANG is '${got}', expected 'y'"
+  if [ "$LTO" = "thin" ]; then
+    got=$(scripts/config --state LTO_CLANG_THIN)
+    [ "$got" = "y" ] || fatal "LTO thin: CONFIG_LTO_CLANG_THIN is '${got}', expected 'y'"
+  else
+    got=$(scripts/config --state LTO_CLANG_FULL)
+    [ "$got" = "y" ] || fatal "LTO full: CONFIG_LTO_CLANG_FULL is '${got}', expected 'y'"
+  fi
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -1690,13 +2456,22 @@ install_kernel() {
   if [ -d "$INSTALL_DIR" ]; then
     cd "$INSTALL_DIR" || exit 1
     log_debug "Downloading Linux source code"
-    if [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
+    if [ "$SOURCE" = "cachyos" ]; then
+      # CachyOS source is signed by its release keys, not kernel.org.
+      if ! RUN_ERRORS_FATAL='' run_ok "get_verified_cachyos_tarball" "Downloading and Verifying CachyOS source tarball..."; then
+        fatal "Failed to download and verify the CachyOS source tarball: ${VERIFY_ERROR:-see the log for details}"
+      fi
+      log_debug "Verified tarball: ${TARGET}"
+      log_success "Downloaded and verified ${TARGET##*/}"
+      file_ext=gz
+    elif [ "$LINUX_VER_NAME" != "Mainline" ] && [ "$GET_VERIFIED_TARBALL" = "1" ]; then
       # get-verified-tarball function; handle a failure here (not in run_ok)
       # so the reason is shown on screen
       if ! RUN_ERRORS_FATAL='' run_ok "get_verified_tarball" "Downloading and Verifying source code tarball..."; then
         fatal "Failed to download and verify the kernel tarball: ${VERIFY_ERROR:-see the log for details}"
       fi
-      log_success "Downloaded and verified ${TARGET}"
+      log_debug "Verified tarball: ${TARGET}"
+      log_success "Downloaded and verified ${TARGET##*/}"
       file_ext=xz
     else
       if [ "$LINUX_VER_NAME" = "Mainline" ]; then
@@ -1727,6 +2502,12 @@ install_kernel() {
     # No -v: the file listing (~90,000 lines) used to bury the build output in the log
     run_ok "tar xf linux-${LINUX_VER}.tar.$file_ext" "Unpacking..."
     log_success "Unpacking finished"
+    if [ "$SOURCE" = "cachyos" ]; then
+      if [ -d "$CACHYOS_SRCNAME" ]; then
+        mv "$CACHYOS_SRCNAME" "linux-${LINUX_VER}" || fatal "Could not rename the CachyOS source tree"
+      fi
+      [ -d "linux-${LINUX_VER}" ] || fatal "CachyOS source did not unpack as linux-${LINUX_VER}"
+    fi
     #)
   fi
   if [ -d "$INSTALL_DIR"/linux-"${LINUX_VER}" ]; then
@@ -1737,34 +2518,25 @@ install_kernel() {
       # Config
       log_debug "Phase 4 of 6: Configuration"
       printf "%s \\n" "${GREEN}▣▣▣${YELLOW}▣${CYAN}□□${NORMAL} Phase ${YELLOW}4${NORMAL} of ${GREEN}6${NORMAL}: Setup kernel"
-      # cp /boot/config-"$(uname -r)" .config
+      prepare_base_config
       log_debug "Configuring..."
+      if [ "$SOURCE" = "cachyos" ]; then
+        apply_cachyos_bore_patch
+      fi
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
-        if ! make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
+        # shellcheck disable=SC2086
+        if ! ${MAKE_LLVM:+$MAKE_LLVM }make "$CONFIG_OPTION" </dev/tty >/dev/tty 2>&1; then
           fatal "make $CONFIG_OPTION failed"
         fi
       else
-        run_ok "make $CONFIG_OPTION" "Writing configuration..."
+        run_ok "${MAKE_LLVM:+$MAKE_LLVM }make $CONFIG_OPTION" "Writing configuration..."
       fi
       log_success "Configuration finished"
       read_sleep 1
       # Disable debug info since it's enabled by default
       if [ "$ENABLE_DEBUG_INFO" = "0" ]; then
         disable_debug_info "$LINUX_VER"
-      fi
-      if [ "$LOWLATENCY" = "1" ]; then
-        # convert generic config to lowlatency
-        scripts/config --disable COMEDI_TESTS_EXAMPLE
-        scripts/config --disable COMEDI_TESTS_NI_ROUTES
-        scripts/config --set-val CONFIG_HZ 1000
-        scripts/config --enable HZ_1000
-        scripts/config --disable HZ_250
-
-        scripts/config --enable LATENCYTOP
-        scripts/config --enable PREEMPT
-        scripts/config --disable PREEMPT_VOLUNTARY
-        scripts/config --set-val TEST_DIV64 m
       fi
       # Revert zstd changes from 6.12
       VER1=$LINUX_VER # version to check if is greater than or equal to
@@ -1787,12 +2559,32 @@ install_kernel() {
         scripts/config --enable CONFIG_ZRAM_BACKEND_842
         scripts/config --enable CONFIG_ZRAM_BACKEND_LZO
       fi
+      if [ "$SOURCE" = "cachyos" ]; then
+        configure_cachyos_source
+      fi
+      configure_cpu
+      configure_lto
+      configure_kernel_name
+      if [ -n "$PROFILE" ]; then
+        log_info "Applying optimization profile: ${PROFILE}"
+        apply_profile "$PROFILE"
+      fi
       for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
       done
       # After --custom-config, so a certificate the user provides is kept
       clear_missing_cert_keys
+      run_ok "${MAKE_LLVM:+$MAKE_LLVM }make olddefconfig" "Finalizing configuration..."
+      if [ -n "$PROFILE" ]; then
+        assert_profile "$PROFILE"
+      fi
+      if [ "$SOURCE" = "cachyos" ]; then
+        assert_cachyos_source
+      fi
+      assert_cpu
+      assert_lto
+      assert_kernel_name
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -1808,7 +2600,7 @@ install_kernel() {
       # Remember where the build output starts in the log, and handle a
       # failure here (instead of run_ok's tail) to point at the real error
       build_log_start=$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0)
-      if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
+      if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | ${MAKE_LLVM:+$MAKE_LLVM }make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
         report_build_failure "$build_log_start"
         exit 1
       fi
@@ -1834,15 +2626,22 @@ install_kernel() {
 
   # mkdebian and kernel.spec name the packages after the release the configured
   # tree builds, CONFIG_LOCALVERSION included (6.12.113-test). The Makefile
-  # alone does not know the localversion, so ask the tree and fall back to the
-  # guessed release only when it cannot answer yet (#49).
-  if BUILT_KERNELRELEASE=$(built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"); then
+  # alone does not know the localversion. Prefer the built image package, whose
+  # name mkdebian derived from that release; ask the tree next (rpm builds), and
+  # fall back to the guessed release only when neither can answer (#49, #74).
+  if [[ $DISTRO_GROUP != "RHEL" ]] && BUILT_DEB_RELEASE=$(built_deb_release "$INSTALL_DIR"); then
+    if [[ $BUILT_DEB_RELEASE != "$LINUX_FULL_VER" ]]; then
+      log_debug "Kernel release from the built package: ${BUILT_DEB_RELEASE} (Makefile gives ${LINUX_FULL_VER})"
+    fi
+    LINUX_FULL_VER=$BUILT_DEB_RELEASE
+  elif BUILT_KERNELRELEASE=$(built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"); then
     if [[ $BUILT_KERNELRELEASE != "$LINUX_FULL_VER" ]]; then
       log_debug "Kernel release from the tree: ${BUILT_KERNELRELEASE} (Makefile gives ${LINUX_FULL_VER})"
     fi
     LINUX_FULL_VER=$BUILT_KERNELRELEASE
   else
     LINUX_FULL_VER=$(kernel_release "$LINUX_FULL_VER")
+    log_warning "Could not read the kernel release from the built package or the configured tree; using ${LINUX_FULL_VER}. The built packages may be named differently."
   fi
   log_info "Kernel release: ${LINUX_FULL_VER}"
   # Install
@@ -1872,6 +2671,7 @@ install_kernel() {
     run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image and headers: ${LINUX_VER}"
   fi
   log_success "Installation finished"
+  check_dkms_release "$LINUX_FULL_VER"
   # else
   #   # Install
   #   run_ok "dpkg -i linux-image-\"${LINUX_VER}\"_\"${LINUX_VER}\"-*.deb" "Installing Kernel image: ${LINUX_VER}"

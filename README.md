@@ -7,18 +7,31 @@ Inspired by [LinuxKernelBuild](https://github.com/Angristan/LinuxKernelBuild)
 [![licence](https://img.shields.io/github/license/tmiland/kernel-installer.svg?style=for-the-badge)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
 ![Bash](https://img.shields.io/badge/Language-SH-4EAA25.svg?style=for-the-badge)
 
-### Script to install the latest [stable/mainline/longterm] kernel from source on Debian-based distributions and the Fedora/RHEL family.
+### Build and install optimized Linux kernels on Debian, Ubuntu, Fedora and RHEL
+
+Use-case profiles, CachyOS source + BORE, Clang LTO, CPU tuning, named kernels, and QEMU boot verification.
 
 [![kernel-installer Image](https://raw.githubusercontent.com/tmiland/kernel-installer/main/_images/kernel_installer.png)](https://github.com/tmiland/kernel-installer/blob/main/_images/kernel_installer.png)
+
+### Highlights
+
+- **Use-case profiles** — `--profile desktop|workstation|gaming|server|laptop` applies HZ/preempt/MGLRU/BBR/cgroup settings for the workload.
+- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.4-1 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
+- **CPU tuning** — `--cpu generic|native|zen4|x86-64-v3|x86-64-v4`. `native` needs compiler support; with CachyOS’s Rust config it also needs a rustc with APXF support, otherwise use `x86-64-v3`/`zen4`.
+- **Clang LTO** — `--lto thin|full` with `clang`/`lld`.
+- **Named kernels** — automatic localversion (`7.3.4-cachyos-workstation-bore`) and `--kernel-tag`.
+- **Boot verification** — QEMU boot smoke test in CI for every distro target.
+
+See [Optimization profiles](#optimization-profiles), [CachyOS source and BORE](#cachyos-source-and-bore), and [Kernel naming](#kernel-naming).
 
 ### Dependencies
 
 Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot cpio kmod build-essential libncurses-dev xz-utils libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
+wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
 # Fedora/RHEL
-wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 rpm-build dracut grubby
+wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make patch openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby
 ```
 `gnupg` is also installed on demand when tarball verification needs `gpg`/`gpgv`, and `kexec-tools` when `--kexec` is used.
 
@@ -120,27 +133,37 @@ For usage, run:
 
 ```bash
 Usage:  kernel_installer.sh [options]
-  If called without arguments, installs stable kernel 7.2.11 using /opt/linux-kernel
+  If called without arguments, installs stable kernel 7.3.4 using /opt/linux-kernel
 
---help                 |-h   display this help and exit
---kernel               |-k   kernel version of choice
---stable               |-s   stable kernel version 7.2.11
---mainline             |-m   mainline kernel version 7.3-rc7
---longterm             |-l   longterm kernel version 6.18.57
---dir                  |-d   install directory
---kexec                |-x   load new kernel without reboot
---config               |-c   set configuration target
---custom-config        |-cc  set custom configuration directive, can be used multiple times
---verbose              |-v   increase verbosity
---get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
---nproc                |-n   set the number of processing units to use
---enable-debug-info    |-edi enable debug info
---lowlatency           |-low convert generic config to lowlatency
---list-installed       |-li  list installed kernels
---default-compression  |-dc  select default compression algorithm
---changelog            |-cl  view changelog for kernel version
---update               |-upd check for a verified script update
---uninstall            |-u   uninstall kernel (use with -k option)
+  --help                 |-h   display this help and exit
+  --kernel               |-k   kernel version of choice
+  --stable               |-s   stable kernel version 7.3.4
+  --mainline             |-m   mainline kernel version 7.4-rc2
+  --longterm             |-l   longterm kernel version 6.18.63
+  --dir                  |-d   install directory
+  --kexec                |-x   load new kernel without reboot
+  --config               |-c   set configuration target
+  --custom-config        |-cc  set custom configuration directive, can be used multiple times
+  --profile              |-p   optimization profile (see --list-profiles)
+  --list-profiles        |-lp  list optimization profiles and exit
+  --base-config          |-bc  profile base config: running, a path, cachyos, or none
+  --source               |      kernel source: vanilla (kernel.org) or cachyos (pinned)
+  --sched                |      scheduler for the cachyos source: eevdf or bore
+  --cpu                  |      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4
+  --lto                  |      LTO: none, thin, or full (requires clang/lld)
+  --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
+  --verbose              |-v   increase verbosity
+  --get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
+  --nproc                |-n   set the number of processing units to use
+  --enable-debug-info    |-edi enable debug info
+  --lowlatency           |-low convert generic config to lowlatency
+  --list-installed       |-li  list installed kernels
+  --default-compression  |-dc  select default compression algorithm
+  --changelog            |-cl  view changelog for kernel version
+  --update               |-upd check for a verified script update
+  --uninstall            |-u   uninstall kernel (default: running kernel; use -k for another)
+
+  Installed kernel version: 7.3.4  | Script version: 1.3.1
 ```
 
 The versions shown are looked up live from kernel.org each time the script runs.
@@ -158,6 +181,8 @@ To use --dir opt:
 ./kernel_installer.sh --dir /path/to/dir
 ```
 The source is downloaded and built in a `linux-kernel` subdirectory (here `/path/to/dir/linux-kernel`, default `/opt/linux-kernel`), which is removed after a successful install. The script refuses to use a directory that is not empty unless it created it in a previous run.
+
+The path passed to `--dir` is the **parent**. It must be owned by you (or root) and must not be group/other-writable unless it is sticky; the installer creates a missing parent with mode `0700`. If it reports `Install directory parent ... is writable by group or others`, run `chmod 700 /path/to/parent` or choose a private directory.
 To load [kernel without reboot](https://linux.die.net/man/8/kexec):
 ```bash
 ./kernel_installer.sh --kexec
@@ -171,8 +196,11 @@ default is `olddefconfig`
 ### Configuration targets
 
 As listed by `make help` in the kernel source (7.3); older kernels may lack some of them.
-With the default `olddefconfig`, the kernel build picks up the running kernel's
-configuration (e.g. `/boot/config-$(uname -r)`) as the base when one is available.
+With the default `olddefconfig`, the build uses the source tree's current
+`.config` as its base. Profile builds (`--profile`) default to copying the
+running kernel's config (`/boot/config-$(uname -r)`) first; use
+`--base-config /path` to choose another config, or `--base-config none` to
+keep the historical arch-defconfig behavior.
 
 ```bash
 config          - Update current config utilising a line-oriented program
@@ -199,6 +227,142 @@ olddefconfig    - Same as oldconfig but sets new symbols to their default value 
 tinyconfig      - Configure the tiniest possible kernel
 ```
 
+### Optimization profiles
+
+Profiles apply a small set of kernel configuration changes for an intended
+workload. They are starting points, not guarantees: benchmark the result with
+your own build/game/server workload.
+
+```bash
+./kernel_installer.sh --list-profiles
+./kernel_installer.sh --profile workstation
+./kernel_installer.sh --profile server --base-config /boot/config-$(uname -r)
+./kernel_installer.sh --profile desktop --base-config none
+```
+
+A profile build uses the running kernel's config as its base by default, so
+the resulting kernel keeps the drivers the machine already uses. Use
+`--base-config /path` for another config, or `--base-config none` to start
+from the historical arch defconfig (useful in containers and CI). The
+repeatable `--custom-config` directives are applied after the profile, so they
+can override any profile value.
+
+| Profile | Best for | Key settings |
+|---|---|---|
+| `desktop` | daily interactive desktop | HZ 1000, full preempt, THP madvise, MGLRU, BBR, O2 |
+| `workstation` | LLM/Android builds plus a responsive desktop | desktop + PSI/cgroup CPU limits, BBR default |
+| `gaming` | latency-sensitive games | desktop timer/preempt settings, O2 |
+| `server` | network/storage throughput | HZ 250, relaxed preempt, MGLRU, BBR default, NR_CPUS 256, O2 |
+| `laptop` | battery and thermals | HZ 300, relaxed preempt, schedutil, AMD/Intel P-state, energy model, MGLRU, O2 |
+| `lowlatency` | audio/live interactive work (legacy alias) | HZ 1000, full preempt, LATENCYTOP; not PREEMPT_RT |
+
+Notes:
+
+- `--lowlatency` is kept as an alias for `--profile lowlatency`. Combining it
+  with a different `--profile` is an error.
+- The `workstation`/`server` profiles enable the cgroup knobs systemd needs
+  (`MEMCG`, `CGROUP_BPF`, `FAIR_GROUP_SCHED`, `CFS_BANDWIDTH`). Use them with a
+  build slice, for example:
+
+  ```bash
+  systemd-run --user --scope --slice=build.slice \
+    -p CPUWeight=50 -p IOWeight=50 -p MemoryHigh=75% \
+    bash -lc 'make -j$(( $(nproc) - 2 ))'
+  ```
+
+  The kernel profile reduces scheduler latency; the cgroup is what reserves
+  capacity for the desktop under a sustained build.
+- `server`/`laptop` use relaxed preemption (`PREEMPT_LAZY` where the kernel
+  provides it, otherwise voluntary). On current x86 kernels the old
+  `PREEMPT_NONE`/`PREEMPT_VOLUNTARY` choices are not both available.
+- BBR: `workstation`/`server` make it the default (`DEFAULT_BBR`); the other
+  profiles enable the module but leave the default congestion control alone.
+  Use `sysctl net.ipv4.tcp_congestion_control=bbr` and
+  `sysctl net.core.default_qdisc=fq` if you want BBR at runtime.
+- Not included in the first cut: BORE/CACHY (require the CachyOS patchset),
+  sched_ext (requires `DEBUG_INFO_BTF` and `pahole`, which conflicts with the
+  default debug-info-off build), O3 (not exposed by vanilla 7.3.4; CachyOS
+  carries an out-of-tree O3 option), LTO, and native CPU tuning. These are
+  separate follow-ups.
+
+### CachyOS source and BORE
+
+The CachyOS source tree carries the CachyOS base patchset (`CONFIG_CACHY`).
+It is pinned to **7.3.4-1** and verified with the CachyOS release keys; the
+config and BORE patch are pinned by commit and SHA256.
+
+```bash
+sudo ./kernel_installer.sh -d /path/to/parent \
+  --source cachyos --sched bore --profile workstation
+# resulting kernel release: 7.3.4-cachyos-workstation-bore
+```
+
+- `--source cachyos` builds the pinned CachyOS source instead of kernel.org.
+  It uses the pinned CachyOS config by default, so `--base-config cachyos` is
+  implied; `--base-config running`, a path, or `none` still override it.
+  Version options (`--stable`, `--mainline`, `--longterm`, `--kernel`) are only
+  accepted if they match the pinned 7.3.4 source.
+- `--sched bore` applies the pinned BORE scheduler patch and enables
+  `CONFIG_SCHED_BORE=y` plus `CONFIG_CACHY=y`. It requires
+  `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
+  kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
+  the BORE patch.
+- CI builds and boots the BORE kernel with Clang ThinLTO on Debian 13 and
+  Ubuntu 24.04, with the `workstation` profile. Native CPU tuning is available
+  but is not part of the default CI matrix because it depends on the build
+  host's toolchain.
+- Checkout runs verify the CachyOS source with `src/keys/cachyos.asc`; piped
+  runs fetch the same pinned fingerprints from keys.openpgp.org.
+- The CachyOS pins live in `kernel_installer.sh` (`CACHYOS_*`). Update the
+  source tag, PKGBUILD revision, config SHA256, patch revision and patch
+  SHA256 together; a mismatch fails closed.
+- `--cpu generic|native|zen4|x86-64-v3|x86-64-v4` selects the CPU target.
+  `generic` is the default and portable. `native` uses `X86_NATIVE_CPU` and
+  builds for the machine doing the build (it may not boot optimally on another
+  machine). `zen4`, `x86-64-v3`, and `x86-64-v4` require `--source cachyos`;
+  they use the CachyOS `MZEN4`/`X86_64_VERSION` options.
+- `--lto none|thin|full` enables Clang LTO. `thin`/`full` install
+  `clang`, `lld`, and `llvm` on demand, configure `LTO_CLANG_THIN`/`FULL`, and
+  build with `LLVM=1 LLVM_IAS=1`; `none` is the default. The kernel is
+  boot-smoked after the build.
+- This is the CachyOS base patchset plus BORE, not the full CachyOS variant
+  matrix. BMQ, sched_ext, and the remaining wiki features are separate
+  follow-ups.
+
+### Kernel naming
+
+Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
+`uname -r`, `/lib/modules`, the headers package, DKMS, initramfs, GRUB and the
+`.deb` names:
+
+```text
+<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>]
+```
+
+| Build | `uname -r` |
+|---|---|
+| CachyOS BORE workstation, generic CPU, no LTO | `7.3.4-cachyos-workstation-bore` |
+| same + native CPU | `7.3.4-cachyos-workstation-bore-native` |
+| same + native + ThinLTO | `7.3.4-cachyos-workstation-bore-native-lto` |
+| CachyOS EEVDF server | `7.3.4-cachyos-server` |
+| vanilla desktop | `7.3.4-vanilla-desktop` |
+
+`--kernel-tag <suffix>` overrides the generated suffix. The default vanilla
+build without a profile stays untagged. `CONFIG_LOCALVERSION_AUTO` is disabled
+for named builds. A new localversion is a new kernel release, so DKMS modules
+must be rebuilt for it; the installer warns when `dkms status -k <release>`
+finds no modules. Rebuild them for the named release with:
+
+```bash
+# use the release printed by the installer
+sudo dkms autoinstall -k 7.3.4-cachyos-workstation-bore
+# or, after booting that kernel:
+sudo dkms autoinstall -k "$(uname -r)"
+```
+
+Use the full release for removal, e.g. `--uninstall -k "$(uname -r)"`
+(the default without `-k`).
+
 ### Custom configuration directives
 
 In order to enable specific kernel configs, one can use `--custom-config` like the following example:
@@ -212,6 +376,21 @@ Note that `--custom-config` can be used multiple times like:
 ```
 ./kernel_installer.sh --custom-config "scripts/config --set-val CONFIG_DM_VDO m" --custom-config "scripts/config --set-val CONFIG_KERNEL_ZSTD y"
 ```
+
+### Boot smoke test
+
+`scripts/boot-smoke.sh` boots the installed kernel in QEMU with a minimal
+initramfs and requires a `BOOT_SMOKE_OK` marker on the serial console. CI runs
+it after installation in every distro install job, including the profile
+smoke job. It proves that the built kernel image boots; it is not a full-OS
+boot or a performance benchmark.
+
+```bash
+./scripts/boot-smoke.sh --version "$(uname -r)"
+```
+
+Requires QEMU, a static C compiler, `cpio`, and `mknod` as root (or run it
+under `fakeroot`). Use `--timeout` to change the 180-second limit.
 
 ### Tarball verification
 
@@ -302,7 +481,5 @@ git add kernel_installer.sh && git commit -m 'chore: bump slib pin' && git push
 *** ***Use at own risk*** ***
 
 ### License
-
-[![MIT License Image](https://upload.wikimedia.org/wikipedia/commons/thumb/0/0c/MIT_logo.svg/220px-MIT_logo.svg.png)](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)
 
 [MIT License](https://github.com/tmiland/kernel-installer/blob/main/LICENSE)

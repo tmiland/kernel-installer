@@ -20,9 +20,10 @@ not() { ! "$@"; }
 funcs=$(sed -n \
   -e '/^kernel_release() {/,/^}/p' \
   -e '/^built_kernelrelease() {/,/^}/p' \
+  -e '/^built_deb_release() {/,/^}/p' \
   -e '/^get_linux_full_ver() {/,/^}/p' \
   -e '/^installed_kernel_pkgs_localversion() {/,/^}/p' "$SCRIPT")
-for fn in kernel_release built_kernelrelease get_linux_full_ver installed_kernel_pkgs_localversion; do
+for fn in kernel_release built_kernelrelease built_deb_release get_linux_full_ver installed_kernel_pkgs_localversion; do
   grep -q "^${fn}() {" <<<"$funcs" || {
     echo "FAIL: ${fn}() not found in kernel_installer.sh"
     exit 1
@@ -37,6 +38,9 @@ touch "$work/tree/Makefile"
 cat > "$work/bin/make" <<'SHIM'
 #!/usr/bin/env bash
 printf '%s %s\n' "$PWD" "$*" >> "$MAKE_LOG"
+case "$*" in
+  *syncconfig) exit "${FAKE_SYNCCONFIG_RC:-0}" ;;
+esac
 printf '%s\n' "${FAKE_KERNELRELEASE-6.12.113-test}"
 SHIM
 chmod +x "$work/bin/make"
@@ -46,15 +50,39 @@ export FAKE_KERNELRELEASE=6.12.113-test
 
 check "built_kernelrelease returns the tree release (localversion included)" \
   test "$(built_kernelrelease "$work/tree")" = 6.12.113-test
+check "built_kernelrelease syncs auto.conf before asking the tree" \
+  grep -qF "$work/tree -s syncconfig" "$MAKE_LOG"
 check "built_kernelrelease runs 'make -s kernelrelease' inside the tree" \
   grep -qF "$work/tree -s kernelrelease" "$MAKE_LOG"
+# kernelrelease reads include/config/auto.conf and never refreshes it, so a
+# stale auto.conf must be resynced from .config before the answer is trusted.
+check "syncconfig runs before kernelrelease" \
+  test "$(grep -nF "$work/tree -s syncconfig" "$MAKE_LOG" | cut -d: -f1)" \
+    -lt "$(grep -nF "$work/tree -s kernelrelease" "$MAKE_LOG" | cut -d: -f1)"
 
 export FAKE_KERNELRELEASE=""
 check "built_kernelrelease reports failure when the tree answers nothing" \
   not built_kernelrelease "$work/tree"
+export FAKE_KERNELRELEASE=6.12.113-test
+export FAKE_SYNCCONFIG_RC=1
+check "built_kernelrelease reports failure when the resync fails" \
+  not built_kernelrelease "$work/tree"
+unset FAKE_KERNELRELEASE FAKE_SYNCCONFIG_RC
 check "built_kernelrelease reports failure for a missing tree" \
   not built_kernelrelease "$work/no-such-tree"
-unset FAKE_KERNELRELEASE MAKE_LOG
+unset MAKE_LOG
+
+# --- built_deb_release: the package name is the ground truth --------------
+mkdir -p "$work/debs"
+touch "$work/debs/linux-image-6.12.113-test_6.12.113-1_amd64.deb" \
+  "$work/debs/linux-headers-6.12.113-test_6.12.113-1_amd64.deb"
+check "built_deb_release reads the release from the image package" \
+  test "$(built_deb_release "$work/debs")" = 6.12.113-test
+touch "$work/debs/linux-image-6.12.113-test-dbg_6.12.113-1_amd64.deb"
+check "built_deb_release ignores the -dbg package" \
+  test "$(built_deb_release "$work/debs")" = 6.12.113-test
+check "built_deb_release reports failure when no image package exists" \
+  not built_deb_release "$work/empty"
 
 # --- get_linux_full_ver: Makefile fallback, without the localversion ------
 cat > "$work/Makefile.plain" <<'EOF'
@@ -114,12 +142,19 @@ chk=$(sed -n '/^chk_kernel() {/,/^}/p' "$SCRIPT")
 # shellcheck disable=SC2016
 uninstall=$(sed -n '/^if \[ "\$mode" = "uninstall" \]; then/,/^fi$/p' "$SCRIPT")
 
-check "phase 6 asks the configured tree for the release it builds" \
+check "phase 6 prefers the release from the built image package" \
+  grep -qF 'BUILT_DEB_RELEASE=$(built_deb_release "$INSTALL_DIR")' <<<"$phase6"
+check "phase 6 uses the package release over the Makefile one" \
+  grep -qF 'LINUX_FULL_VER=$BUILT_DEB_RELEASE' <<<"$phase6"
+check "phase 6 asks the configured tree when there is no Debian package" \
   grep -qF 'built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"' <<<"$phase6"
 check "phase 6 uses the tree release over the Makefile one" \
   grep -qF 'LINUX_FULL_VER=$BUILT_KERNELRELEASE' <<<"$phase6"
-check "phase 6 falls back to the Makefile release when the tree cannot answer" \
+check "phase 6 falls back to the Makefile release when neither can answer" \
   grep -qF 'LINUX_FULL_VER=$(kernel_release "$LINUX_FULL_VER")' <<<"$phase6"
+check "built_deb_release is defined before its call site" \
+  test "$(grep -n '^built_deb_release() {' "$SCRIPT" | cut -d: -f1)" \
+    -lt "$(grep -n 'built_deb_release "$INSTALL_DIR"' "$SCRIPT" | cut -d: -f1)"
 check "built_kernelrelease is defined before its call site" \
   test "$(grep -n '^built_kernelrelease() {' "$SCRIPT" | cut -d: -f1)" \
     -lt "$(grep -n 'built_kernelrelease "$INSTALL_DIR' "$SCRIPT" | cut -d: -f1)"

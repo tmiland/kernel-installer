@@ -132,11 +132,11 @@ jobs:
         run: |
           mkdir -p "${TMPDIR:?}"
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng
+            dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Show environment
@@ -185,9 +185,11 @@ jobs:
             # resolved at argument parsing, before the build changes directory.
             # The success path removes $INSTALL_DIR, so verify via the install
             # log: the archive was downloaded under the invocation directory.
-            grep -q "Downloaded and verified .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
+            grep -q "Verified tarball: .*ki-build/linux-kernel/linux-${ver}\.tar\.xz" /var/log/kernel-installer/kernel_installer.log
           fi
           echo "Kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh --version "${KERNEL_VERSION}"
       - name: Uninstall kernel ${{ env.KERNEL_VERSION }}
         run: |
           set -ux
@@ -249,11 +251,11 @@ jobs:
       - name: Install container prerequisites
         run: |
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng
+            dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Build and install mainline kernel ${{ env.MAINLINE_VER }}
@@ -290,6 +292,8 @@ jobs:
           test -f "/boot/config-${ver}"
           test -d "/lib/modules/${ver}/kernel"
           echo "Mainline kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -299,7 +303,7 @@ jobs:
           if-no-files-found: ignore
 
   custom-config-smoke:
-    name: Custom config smoke test
+    name: Custom config + profile smoke test
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -313,9 +317,9 @@ jobs:
         run: |
           apt-get update -qq
           # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
       - uses: actions/checkout@v4
-      - name: Reject malformed --custom-config values
+      - name: Reject malformed --custom-config values and unknown profiles
         run: |
           set -eux
           # a missing value must abort immediately
@@ -330,28 +334,112 @@ jobs:
             exit 1
           fi
           grep -q "expects a scripts/config command" /tmp/cc-raw.log
+          # an unknown profile must abort before the download
+          if ./kernel_installer.sh --profile is-not-a-profile >/tmp/profile-unknown.log 2>&1; then
+            echo "FAIL: unknown --profile was accepted"
+            exit 1
+          fi
+          grep -q "Unknown optimization profile" /tmp/profile-unknown.log
           echo "Fast validation checks passed"
-      - name: Build and install kernel ${{ env.KERNEL_VERSION }} with custom config
-        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
+      - name: Build and install kernel ${{ env.KERNEL_VERSION }} with profile and custom config
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" --profile workstation --base-config none -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
       - name: Show installer log on failure
         if: failure()
         run: |
           echo "=== /var/log/kernel-installer/kernel_installer.log (last 150 lines) ==="
           tail -n 150 /var/log/kernel-installer/kernel_installer.log || true
-      - name: Verify custom config applied
+      - name: Verify profile and custom config applied
         run: |
           set -eux
-          ver="${KERNEL_VERSION}"
-          dpkg -s "linux-image-${ver}" >/dev/null
-          test -f "/boot/config-${ver}"
-          grep -q '^CONFIG_DEFAULT_HOSTNAME="cc-smoke"$' "/boot/config-${ver}"
-          grep -q '^CONFIG_PANIC_TIMEOUT=42$' "/boot/config-${ver}"
-          echo "Custom config directives verified in /boot/config-${ver}"
+          set -- /boot/vmlinuz-*
+          test "$#" -eq 1
+          release="${1##*/vmlinuz-}"
+          test "$release" = "${KERNEL_VERSION}-vanilla-workstation"
+          cfg="/boot/config-${release}"
+          dpkg -s "linux-image-${release}" >/dev/null
+          test -f "$cfg"
+          grep -q '^CONFIG_DEFAULT_HOSTNAME="cc-smoke"$' "$cfg"
+          grep -q '^CONFIG_PANIC_TIMEOUT=42$' "$cfg"
+          # workstation profile
+          grep -q '^CONFIG_HZ=1000$' "$cfg"
+          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
+          grep -q '^CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y$' "$cfg"
+          grep -q '^CONFIG_ZRAM=y$' "$cfg"
+          grep -q '^CONFIG_LRU_GEN=y$' "$cfg"
+          grep -q '^CONFIG_LRU_GEN_ENABLED=y$' "$cfg"
+          grep -q '^CONFIG_CFS_BANDWIDTH=y$' "$cfg"
+          grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
+          grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' "$cfg"
+          grep -q '^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y$' "$cfg"
+          echo "Profile and custom config verified in $cfg"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-installer-logs-custom-config-smoke
+          path: /var/log/kernel-installer/kernel_installer.log
+          if-no-files-found: ignore
+
+  cachyos-bore-smoke:
+    name: CachyOS BORE + LTO ${{ matrix.name }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13 (trixie)
+            image: debian:13
+            slug: debian-13
+          - name: Ubuntu 24.04 (noble)
+            image: ubuntu:24.04
+            slug: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+    env:
+      TERM: xterm
+    steps:
+      - name: Install container prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools qemu-system-x86
+      - uses: actions/checkout@v4
+      - name: Build and install CachyOS BORE kernel
+        run: ./kernel_installer.sh --source cachyos --sched bore --profile workstation --lto thin
+      - name: Show installer log on failure
+        if: failure()
+        run: |
+          echo "=== /var/log/kernel-installer/kernel_installer.log (last 200 lines) ==="
+          tail -n 200 /var/log/kernel-installer/kernel_installer.log || true
+      - name: Verify CachyOS BORE and workstation config
+        run: |
+          set -eux
+          set -- /boot/vmlinuz-*
+          test "$#" -eq 1
+          release="${1##*/vmlinuz-}"
+          test "$release" = "7.3.4-cachyos-workstation-bore-lto"
+          cfg="/boot/config-${release}"
+          test -f "$cfg"
+          grep -q '^CONFIG_CACHY=y$' "$cfg"
+          grep -q '^CONFIG_SCHED_BORE=y$' "$cfg"
+          grep -q '^CONFIG_CC_IS_CLANG=y$' "$cfg"
+          grep -q '^CONFIG_LTO_CLANG_THIN=y$' "$cfg"
+          grep -q '^CONFIG_HZ=1000$' "$cfg"
+          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
+          grep -q '^CONFIG_LRU_GEN=y$' "$cfg"
+          grep -q '^CONFIG_DEFAULT_BBR=y$' "$cfg"
+          grep -q '^CONFIG_CFS_BANDWIDTH=y$' "$cfg"
+          echo "CachyOS BORE + workstation config verified in $cfg"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
+      - name: Upload installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-installer-logs-cachyos-bore-${{ matrix.slug }}
           path: /var/log/kernel-installer/kernel_installer.log
           if-no-files-found: ignore
 
@@ -394,11 +482,11 @@ jobs:
           # neither curl nor wget, which made the run fail as a bogus "check
           # your network connection" error.
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y git ca-certificates procps-ng curl
+            dnf install -y git ca-certificates procps-ng curl qemu-system-x86 glibc-static
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
-            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools curl
+            apt-get install -y -qq git ca-certificates lsb-release procps initramfs-tools curl qemu-system-x86
           fi
       - uses: actions/checkout@v4
       - name: Show environment
@@ -462,6 +550,8 @@ jobs:
           test -f "/boot/config-${ver}"
           test -d "/lib/modules/${ver}/kernel"
           echo "Current stable kernel ${ver} installed successfully on $(. /etc/os-release && echo "$PRETTY_NAME")"
+      - name: Boot smoke test
+        run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
         if: always()
         uses: actions/upload-artifact@v4
