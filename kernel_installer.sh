@@ -573,6 +573,26 @@ built_kernelrelease() {
   printf '%s\n' "$release"
 }
 
+# Release from the built image package, linux-image-<release>_<version>_<arch>.deb.
+# mkdebian names the package after the release the configured tree built, so the
+# package itself is the ground truth for the install path (#74).
+built_deb_release() {
+  local dir=${1:-.} deb release
+  for deb in "$dir"/linux-image-*.deb; do
+    [ -e "$deb" ] || continue
+    release=${deb##*/}
+    # mkdebian names the debug package linux-image-<release>-dbg; it carries a
+    # different suffix and must not win the release lookup.
+    case $release in *-dbg_*) continue ;; esac
+    release=${release#linux-image-}
+    release=${release%%_*}
+    [ -n "$release" ] || continue
+    printf '%s\n' "$release"
+    return 0
+  done
+  return 1
+}
+
 # Kernel release derived from the top-level Makefile,
 # VERSION.PATCHLEVEL.SUBLEVEL+EXTRAVERSION. It carries the -rc suffix
 # (7.3-rc7 -> 7.3.0-rc7) but not CONFIG_LOCALVERSION, which only the
@@ -2606,16 +2626,22 @@ install_kernel() {
 
   # mkdebian and kernel.spec name the packages after the release the configured
   # tree builds, CONFIG_LOCALVERSION included (6.12.113-test). The Makefile
-  # alone does not know the localversion, so ask the tree and fall back to the
-  # guessed release only when it cannot answer yet (#49).
-  if BUILT_KERNELRELEASE=$(built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"); then
+  # alone does not know the localversion. Prefer the built image package, whose
+  # name mkdebian derived from that release; ask the tree next (rpm builds), and
+  # fall back to the guessed release only when neither can answer (#49, #74).
+  if [[ $DISTRO_GROUP != "RHEL" ]] && BUILT_DEB_RELEASE=$(built_deb_release "$INSTALL_DIR"); then
+    if [[ $BUILT_DEB_RELEASE != "$LINUX_FULL_VER" ]]; then
+      log_debug "Kernel release from the built package: ${BUILT_DEB_RELEASE} (Makefile gives ${LINUX_FULL_VER})"
+    fi
+    LINUX_FULL_VER=$BUILT_DEB_RELEASE
+  elif BUILT_KERNELRELEASE=$(built_kernelrelease "$INSTALL_DIR/linux-${LINUX_VER}"); then
     if [[ $BUILT_KERNELRELEASE != "$LINUX_FULL_VER" ]]; then
       log_debug "Kernel release from the tree: ${BUILT_KERNELRELEASE} (Makefile gives ${LINUX_FULL_VER})"
     fi
     LINUX_FULL_VER=$BUILT_KERNELRELEASE
   else
     LINUX_FULL_VER=$(kernel_release "$LINUX_FULL_VER")
-    log_warning "Could not read the kernel release from the configured tree; using ${LINUX_FULL_VER}. The built packages may be named differently."
+    log_warning "Could not read the kernel release from the built package or the configured tree; using ${LINUX_FULL_VER}. The built packages may be named differently."
   fi
   log_info "Kernel release: ${LINUX_FULL_VER}"
   # Install
