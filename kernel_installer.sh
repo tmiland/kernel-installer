@@ -2254,6 +2254,7 @@ kexec_new_kernel() {
 # Download and verify the pinned CachyOS source tarball. The CachyOS release
 # is signed by Peter Jung or Eric Naim; checkout runs use the bundled public
 # keys, piped runs fetch the same pinned fingerprints from keys.openpgp.org.
+# shellcheck disable=SC2329  # called indirectly through run_ok
 get_verified_cachyos_tarball() {
   local tar="linux-${LINUX_VER}.tar.gz"
   local asc="${tar}.asc"
