@@ -16,7 +16,7 @@ taxonomy:
 
 # Optimized Linux kernels on Debian: profiles, CachyOS BORE, and boot verification
 
-For a long time [kernel-installer](https://github.com/tmiland/kernel-installer) did one thing: download a kernel.org tarball, build it with `make bindeb-pkg`, and install the result on Debian, Ubuntu, Fedora or RHEL. That is still the core, but the next release adds a layer on top: workload profiles, an optional CachyOS source build with the BORE scheduler, Clang LTO, CPU tuning, named kernel releases, and a QEMU boot smoke test in CI.
+For a long time [kernel-installer](https://github.com/tmiland/kernel-installer) did one thing: download a kernel.org tarball, build it with `make bindeb-pkg`, and install the result on Debian, Ubuntu, Fedora or RHEL. That is still the core, but release 1.4.0 adds a layer on top: workload profiles, an optional CachyOS source build with the BORE scheduler, Clang LTO, CPU tuning, named kernel releases, and a QEMU boot smoke test in CI.
 
 This post is a follow-up to the original kernel-installer write-up and covers what changed, how to use it, and where the limits are.
 
