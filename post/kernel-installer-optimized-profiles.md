@@ -1,6 +1,6 @@
 ---
 title: "Optimized Linux kernels on Debian: profiles, CachyOS BORE, and boot verification"
-post_status: draft
+post_status: publish
 post_excerpt: Kernel-installer now builds workload-specific kernels with use-case profiles, the CachyOS source and BORE scheduler, Clang LTO, CPU tuning, named releases, and a QEMU boot smoke test.
 taxonomy:
     category:
