@@ -155,6 +155,7 @@ Usage:  kernel_installer.sh [options]
   --bbr3                 |      make BBRv3 the default TCP congestion control (cachyos)
   --binder               |      enable Android Binder IPC and binderfs (Waydroid)
   --sched-ext            |      enable sched_ext and BTF for userspace BPF schedulers
+  --rt                   |      build a PREEMPT_RT real-time kernel (6.12+)
   --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
   --verbose              |-v   increase verbosity
   --get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
@@ -331,7 +332,7 @@ sudo ./kernel_installer.sh -d /path/to/parent \
   boot-smoked after the build.
 - This is the CachyOS base patchset plus BORE, not the full CachyOS variant
   matrix. BMQ and the remaining wiki features are separate follow-ups;
-  sched_ext is available through `--sched-ext`.
+  sched_ext and PREEMPT_RT are available through `--sched-ext` and `--rt`.
 
 ### Kernel naming
 
@@ -340,7 +341,7 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 `.deb` names:
 
 ```text
-<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>][-hz<n>][-bbr3][-binder][-sched-ext]
+<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>][-hz<n>][-bbr3][-binder][-sched-ext][-rt]
 ```
 
 | Build | `uname -r` |
@@ -349,6 +350,7 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 | same + native CPU | `7.3.4-cachyos-workstation-bore-native` |
 | same + native + ThinLTO | `7.3.4-cachyos-workstation-bore-native-lto` |
 | same + 600 Hz + BBR3 + Binder + sched_ext | `7.3.4-cachyos-workstation-bore-hz600-bbr3-binder-sched-ext` |
+| same + PREEMPT_RT | `7.3.4-cachyos-workstation-bore-rt` |
 | CachyOS EEVDF server | `7.3.4-cachyos-server` |
 | vanilla desktop | `7.3.4-vanilla-desktop` |
 
@@ -378,11 +380,17 @@ These flags are applied after the profile and before `--custom-config`:
 | `--bbr3` | BBRv3 as the default TCP congestion control | CachyOS source only; per-socket override remains |
 | `--binder` | Android Binder IPC and binderfs | for Waydroid; already enabled by the CachyOS config |
 | `--sched-ext` | `SCHED_CLASS_EXT` and BTF | kernel 6.12+; re-enables debug info, installs `dwarves` (pahole); heavier build |
+| `--rt` | `PREEMPT_RT` real-time kernel | kernel 6.12+; disables dynamic preemption; throughput cost |
 
 `--sched-ext` does not replace BORE at build time. It enables the sched_ext
 class; run a userspace scheduler such as `scx_rusty` or `scx_lavd` to attach
 one, and stop it to return to the default scheduler. The debug info and BTF
 that sched_ext needs increase the build time and vmlinux size.
+
+`--rt` is the mainline PREEMPT_RT kernel, not the `lowlatency` profile. It
+makes almost the whole kernel preemptible for audio, robotics and industrial
+workloads, and costs throughput; use it only when you need deterministic
+latency.
 
 The flags are part of the localversion, so builds that differ only by these
 options do not collide in `/lib/modules` or DKMS:
