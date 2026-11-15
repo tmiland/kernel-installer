@@ -342,7 +342,7 @@ jobs:
           grep -q "Unknown optimization profile" /tmp/profile-unknown.log
           echo "Fast validation checks passed"
       - name: Build and install kernel ${{ env.KERNEL_VERSION }} with profile and custom config
-        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" --profile workstation --base-config none --binder --sched-ext -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
+        run: ./kernel_installer.sh -k "${KERNEL_VERSION}" --profile workstation --base-config none --binder --sched-ext --rt -cc 'scripts/config --set-str DEFAULT_HOSTNAME cc-smoke' -cc 'scripts/config --set-val PANIC_TIMEOUT 42'
       - name: Show installer log on failure
         if: failure()
         run: |
@@ -354,7 +354,7 @@ jobs:
           set -- /boot/vmlinuz-*
           test "$#" -eq 1
           release="${1##*/vmlinuz-}"
-          test "$release" = "${KERNEL_VERSION}-vanilla-workstation-binder-sched-ext"
+          test "$release" = "${KERNEL_VERSION}-vanilla-workstation-binder-sched-ext-rt"
           cfg="/boot/config-${release}"
           dpkg -s "linux-image-${release}" >/dev/null
           test -f "$cfg"
@@ -376,7 +376,12 @@ jobs:
           grep -q '^CONFIG_ANDROID_BINDERFS=y$' "$cfg"
           grep -q '^CONFIG_SCHED_CLASS_EXT=y$' "$cfg"
           grep -q '^CONFIG_DEBUG_INFO_BTF=y$' "$cfg"
-          echo "Profile, custom config, binder and sched_ext verified in $cfg"
+          # --rt
+          grep -q '^CONFIG_EXPERT=y$' "$cfg"
+          grep -q '^CONFIG_PREEMPT_RT=y$' "$cfg"
+          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
+          grep -q '^# CONFIG_PREEMPT_DYNAMIC is not set$' "$cfg"
+          echo "Profile, custom config, binder, sched_ext and RT verified in $cfg"
       - name: Boot smoke test
         run: ./scripts/boot-smoke.sh
       - name: Upload installer logs
