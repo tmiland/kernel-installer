@@ -29,6 +29,7 @@ check "help documents --hz" grep -q -- '--hz' <<<"$out"
 check "help documents --bbr3" grep -q -- '--bbr3' <<<"$out"
 check "help documents --binder" grep -q -- '--binder' <<<"$out"
 check "help documents --sched-ext" grep -q -- '--sched-ext' <<<"$out"
+check "help documents --rt" grep -q -- '--rt' <<<"$out"
 
 # --- configure/assert functions ------------------------------------------
 work=$(mktemp -d)
@@ -41,7 +42,8 @@ if [ "$1" = "--state" ]; then
   case "$2" in
     HZ) echo "${FAKE_HZ:-1000}" ;;
     HZ_600) echo "${FAKE_HZ600:-y}" ;;
-    TCP_CONG_BBR3 | DEFAULT_BBR3 | ANDROID_BINDER_IPC | ANDROID_BINDERFS | SCHED_CLASS_EXT | DEBUG_INFO_BTF) echo y ;;
+    TCP_CONG_BBR3 | DEFAULT_BBR3 | ANDROID_BINDER_IPC | ANDROID_BINDERFS | SCHED_CLASS_EXT | DEBUG_INFO_BTF | PREEMPT_RT | PREEMPT) echo y ;;
+    PREEMPT_DYNAMIC) echo n ;;
     DEFAULT_TCP_CONG) echo bbr3 ;;
     *) echo undef ;;
   esac
@@ -63,13 +65,15 @@ funcs=$(sed -n \
   -e '/^configure_bbr3() {/,/^}/p' \
   -e '/^configure_binder() {/,/^}/p' \
   -e '/^configure_sched_ext() {/,/^}/p' \
+  -e '/^configure_rt() {/,/^}/p' \
   -e '/^assert_hz() {/,/^}/p' \
   -e '/^assert_bbr3() {/,/^}/p' \
   -e '/^assert_binder() {/,/^}/p' \
   -e '/^assert_sched_ext() {/,/^}/p' \
+  -e '/^assert_rt() {/,/^}/p' \
   -e '/^assert_profile() {/,/^}/p' "$SCRIPT")
-for fn in versionToInt configure_hz configure_bbr3 configure_binder configure_sched_ext \
-  assert_hz assert_bbr3 assert_binder assert_sched_ext assert_profile; do
+for fn in versionToInt configure_hz configure_bbr3 configure_binder configure_sched_ext configure_rt \
+  assert_hz assert_bbr3 assert_binder assert_sched_ext assert_rt assert_profile; do
   grep -q "^${fn}() {" <<<"$funcs" || {
     echo "FAIL: ${fn}() not found in kernel_installer.sh"
     exit 1
@@ -117,8 +121,20 @@ check "sched-ext enables BPF_SYSCALL" has '--enable BPF_SYSCALL'
 unset SCHED_EXT
 
 : > "$CFG_LOG"
-export HZ_OVERRIDE=600 BBR3=1 BINDER=1 SCHED_EXT=1 FAKE_HZ=600
-if assert_hz && assert_bbr3 && assert_binder && assert_sched_ext; then
+export RT=1
+configure_rt
+check "rt enables EXPERT" has '--enable EXPERT'
+check "rt enables PREEMPT_RT" has '--enable PREEMPT_RT'
+check "rt enables PREEMPT" has '--enable PREEMPT'
+check "rt disables PREEMPT_DYNAMIC" has '--disable PREEMPT_DYNAMIC'
+check "rt disables PREEMPT_NONE" has '--disable PREEMPT_NONE'
+check "rt disables PREEMPT_VOLUNTARY" has '--disable PREEMPT_VOLUNTARY'
+check "rt disables PREEMPT_LAZY" has '--disable PREEMPT_LAZY'
+unset RT
+
+: > "$CFG_LOG"
+export HZ_OVERRIDE=600 BBR3=1 BINDER=1 SCHED_EXT=1 RT=1 FAKE_HZ=600
+if assert_hz && assert_bbr3 && assert_binder && assert_sched_ext && assert_rt; then
   ok=1
 else
   ok=0
@@ -140,6 +156,11 @@ assert_profile lowlatency
 check "lowlatency keeps its own assertion set" \
   not grep -qx 'TRANSPARENT_HUGEPAGE_MADVISE=y' "$work/profile-expect"
 check "lowlatency still gets the HZ override" grep -qx 'HZ=600' "$work/profile-expect"
+export RT=1 HZ_OVERRIDE='' BBR3=0
+assert_profile server
+check "rt replaces the server PREEMPT=n" not grep -qx 'PREEMPT=n' "$work/profile-expect"
+check "rt adds PREEMPT_RT" grep -qx 'PREEMPT_RT=y' "$work/profile-expect"
+check "rt adds PREEMPT" grep -qx 'PREEMPT=y' "$work/profile-expect"
 
 # --- call order ----------------------------------------------------------
 line_of() { grep -n "$1" "$SCRIPT" | head -1 | cut -d: -f1; }
