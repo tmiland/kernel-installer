@@ -931,13 +931,16 @@ profile_assert() {
 
 assert_profile() {
   local -a common=(
-    TRANSPARENT_HUGEPAGE_MADVISE=y
-    TRANSPARENT_HUGEPAGE_ALWAYS=n
     PSI=y
     ZRAM=y
     TCP_CONG_BBR=y
     NET_SCH_FQ=y
   )
+  # TRANSPARENT_HUGEPAGE depends on !PREEMPT_RT, so it cannot be asserted on
+  # an RT kernel; olddefconfig drops the profile's THP settings.
+  if [ "$RT" != "1" ]; then
+    common+=(TRANSPARENT_HUGEPAGE_MADVISE=y TRANSPARENT_HUGEPAGE_ALWAYS=n)
+  fi
   local -a expect=() filtered=()
   local item use_common=1
   if profile_kernel_ge "$LINUX_VER" 6.1; then

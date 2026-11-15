@@ -161,6 +161,9 @@ assert_profile server
 check "rt replaces the server PREEMPT=n" not grep -qx 'PREEMPT=n' "$work/profile-expect"
 check "rt adds PREEMPT_RT" grep -qx 'PREEMPT_RT=y' "$work/profile-expect"
 check "rt adds PREEMPT" grep -qx 'PREEMPT=y' "$work/profile-expect"
+assert_profile workstation
+check "rt drops the THP assertions" \
+  not grep -qx 'TRANSPARENT_HUGEPAGE_MADVISE=y' "$work/profile-expect"
 
 # --- call order ----------------------------------------------------------
 line_of() { grep -n "$1" "$SCRIPT" | head -1 | cut -d: -f1; }
