@@ -42,7 +42,7 @@ if [ "$1" = "--state" ]; then
   case "$2" in
     HZ) echo "${FAKE_HZ:-1000}" ;;
     HZ_600) echo "${FAKE_HZ600:-y}" ;;
-    TCP_CONG_BBR3 | DEFAULT_BBR3 | ANDROID_BINDER_IPC | ANDROID_BINDERFS | SCHED_CLASS_EXT | DEBUG_INFO_BTF | PREEMPT_RT | PREEMPT) echo y ;;
+    TCP_CONG_BBR3 | DEFAULT_BBR3 | ANDROID_BINDER_IPC | ANDROID_BINDERFS | SCHED_CLASS_EXT | DEBUG_INFO_BTF | PREEMPT_RT | PREEMPT | PREEMPTION) echo y ;;
     PREEMPT_DYNAMIC) echo n ;;
     DEFAULT_TCP_CONG) echo bbr3 ;;
     *) echo undef ;;
@@ -160,10 +160,11 @@ export RT=1 HZ_OVERRIDE='' BBR3=0
 assert_profile server
 check "rt replaces the server PREEMPT=n" not grep -qx 'PREEMPT=n' "$work/profile-expect"
 check "rt adds PREEMPT_RT" grep -qx 'PREEMPT_RT=y' "$work/profile-expect"
-check "rt adds PREEMPT" grep -qx 'PREEMPT=y' "$work/profile-expect"
+check "rt adds PREEMPTION" grep -qx 'PREEMPTION=y' "$work/profile-expect"
 assert_profile workstation
 check "rt drops the THP assertions" \
   not grep -qx 'TRANSPARENT_HUGEPAGE_MADVISE=y' "$work/profile-expect"
+check "rt drops the fixed PREEMPT model" not grep -qx 'PREEMPT=y' "$work/profile-expect"
 
 # --- call order ----------------------------------------------------------
 line_of() { grep -n "$1" "$SCRIPT" | head -1 | cut -d: -f1; }

@@ -379,7 +379,7 @@ jobs:
           # --rt
           grep -q '^CONFIG_EXPERT=y$' "$cfg"
           grep -q '^CONFIG_PREEMPT_RT=y$' "$cfg"
-          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
+          grep -q '^CONFIG_PREEMPTION=y$' "$cfg"
           grep -q '^# CONFIG_PREEMPT_DYNAMIC is not set$' "$cfg"
           echo "Profile, custom config, binder, sched_ext and RT verified in $cfg"
       - name: Boot smoke test

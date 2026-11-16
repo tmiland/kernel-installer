@@ -986,7 +986,9 @@ assert_profile() {
       DEFAULT_BBR=y | DEFAULT_TCP_CONG=bbr)
         [ "$BBR3" = "1" ] && continue
         ;;
-      PREEMPT=n)
+      PREEMPT=y | PREEMPT=n)
+        # 6.12 has PREEMPT_RT inside the preemption choice (PREEMPT=n); 7.x
+        # has it outside (PREEMPT=y). PREEMPT_RT + PREEMPTION cover both.
         [ "$RT" = "1" ] && continue
         ;;
     esac
@@ -994,7 +996,7 @@ assert_profile() {
   done
   [ -n "$HZ_OVERRIDE" ] && filtered+=("HZ=$HZ_OVERRIDE" "HZ_${HZ_OVERRIDE}=y")
   [ "$BBR3" = "1" ] && filtered+=(DEFAULT_BBR3=y DEFAULT_TCP_CONG=bbr3)
-  [ "$RT" = "1" ] && filtered+=(PREEMPT=y PREEMPT_RT=y)
+  [ "$RT" = "1" ] && filtered+=(PREEMPT_RT=y PREEMPTION=y)
   if [ "$use_common" = "1" ]; then
     profile_assert "${common[@]}" "${filtered[@]}"
   else
@@ -2590,8 +2592,8 @@ assert_rt() {
   local got
   got=$(scripts/config --state PREEMPT_RT)
   [ "$got" = "y" ] || fatal "RT: CONFIG_PREEMPT_RT is '${got}', expected 'y'"
-  got=$(scripts/config --state PREEMPT)
-  [ "$got" = "y" ] || fatal "RT: CONFIG_PREEMPT is '${got}', expected 'y'"
+  got=$(scripts/config --state PREEMPTION)
+  [ "$got" = "y" ] || fatal "RT: CONFIG_PREEMPTION is '${got}', expected 'y'"
   got=$(scripts/config --state PREEMPT_DYNAMIC)
   case "$got" in
     n | undef) ;;
