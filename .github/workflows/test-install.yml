@@ -380,7 +380,10 @@ jobs:
           grep -q '^CONFIG_EXPERT=y$' "$cfg"
           grep -q '^CONFIG_PREEMPT_RT=y$' "$cfg"
           grep -q '^CONFIG_PREEMPTION=y$' "$cfg"
-          grep -q '^# CONFIG_PREEMPT_DYNAMIC is not set$' "$cfg"
+          if grep -q '^CONFIG_PREEMPT_DYNAMIC=y$' "$cfg"; then
+            echo "PREEMPT_DYNAMIC must be disabled on an RT kernel"
+            exit 1
+          fi
           echo "Profile, custom config, binder, sched_ext and RT verified in $cfg"
       - name: Boot smoke test
         run: ./scripts/boot-smoke.sh
