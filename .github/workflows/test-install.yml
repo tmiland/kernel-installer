@@ -360,10 +360,8 @@ jobs:
           test -f "$cfg"
           grep -q '^CONFIG_DEFAULT_HOSTNAME="cc-smoke"$' "$cfg"
           grep -q '^CONFIG_PANIC_TIMEOUT=42$' "$cfg"
-          # workstation profile
+          # workstation profile (PREEMPT and THP are not available on RT)
           grep -q '^CONFIG_HZ=1000$' "$cfg"
-          grep -q '^CONFIG_PREEMPT=y$' "$cfg"
-          grep -q '^CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y$' "$cfg"
           grep -q '^CONFIG_ZRAM=y$' "$cfg"
           grep -q '^CONFIG_LRU_GEN=y$' "$cfg"
           grep -q '^CONFIG_LRU_GEN_ENABLED=y$' "$cfg"
