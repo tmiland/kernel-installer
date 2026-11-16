@@ -173,6 +173,8 @@ BBR3=${BBR3:-0}
 BINDER=${BINDER:-0}
 # sched_ext and BTF for userspace BPF schedulers
 SCHED_EXT=${SCHED_EXT:-0}
+# PREEMPT_RT real-time kernel
+RT=${RT:-0}
 # Optional custom localversion suffix (without or with a leading hyphen)
 KERNEL_TAG=${KERNEL_TAG:-}
 
@@ -897,6 +899,7 @@ build_kernel_tag() {
   [ "$BBR3" = "1" ] && tag+="-bbr3"
   [ "$BINDER" = "1" ] && tag+="-binder"
   [ "$SCHED_EXT" = "1" ] && tag+="-sched-ext"
+  [ "$RT" = "1" ] && tag+="-rt"
   KERNEL_TAG="$tag"
 }
 
@@ -928,13 +931,16 @@ profile_assert() {
 
 assert_profile() {
   local -a common=(
-    TRANSPARENT_HUGEPAGE_MADVISE=y
-    TRANSPARENT_HUGEPAGE_ALWAYS=n
     PSI=y
     ZRAM=y
     TCP_CONG_BBR=y
     NET_SCH_FQ=y
   )
+  # TRANSPARENT_HUGEPAGE depends on !PREEMPT_RT, so it cannot be asserted on
+  # an RT kernel; olddefconfig drops the profile's THP settings.
+  if [ "$RT" != "1" ]; then
+    common+=(TRANSPARENT_HUGEPAGE_MADVISE=y TRANSPARENT_HUGEPAGE_ALWAYS=n)
+  fi
   local -a expect=() filtered=()
   local item use_common=1
   if profile_kernel_ge "$LINUX_VER" 6.1; then
@@ -980,11 +986,17 @@ assert_profile() {
       DEFAULT_BBR=y | DEFAULT_TCP_CONG=bbr)
         [ "$BBR3" = "1" ] && continue
         ;;
+      PREEMPT=y | PREEMPT=n)
+        # 6.12 has PREEMPT_RT inside the preemption choice (PREEMPT=n); 7.x
+        # has it outside (PREEMPT=y). PREEMPT_RT + PREEMPTION cover both.
+        [ "$RT" = "1" ] && continue
+        ;;
     esac
     filtered+=("$item")
   done
   [ -n "$HZ_OVERRIDE" ] && filtered+=("HZ=$HZ_OVERRIDE" "HZ_${HZ_OVERRIDE}=y")
   [ "$BBR3" = "1" ] && filtered+=(DEFAULT_BBR3=y DEFAULT_TCP_CONG=bbr3)
+  [ "$RT" = "1" ] && filtered+=(PREEMPT_RT=y PREEMPTION=y)
   if [ "$use_common" = "1" ]; then
     profile_assert "${common[@]}" "${filtered[@]}"
   else
@@ -1350,6 +1362,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--bbr3                 |${NORMAL}      make BBRv3 the default TCP congestion control (cachyos)"
   printf "%s\\n" "  ${YELLOW}--binder               |${NORMAL}      enable Android Binder IPC and binderfs (Waydroid)"
   printf "%s\\n" "  ${YELLOW}--sched-ext            |${NORMAL}      enable sched_ext and BTF for userspace BPF schedulers"
+  printf "%s\\n" "  ${YELLOW}--rt                   |${NORMAL}      build a PREEMPT_RT real-time kernel (6.12+)"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
@@ -1504,6 +1517,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --sched-ext)
       SCHED_EXT=1
+      shift
+      ;;
+    --rt)
+      RT=1
       shift
       ;;
     --kernel-tag)
@@ -2516,6 +2533,22 @@ configure_sched_ext() {
   scripts/config --enable SCHED_CLASS_EXT
 }
 
+# PREEMPT_RT: fully preemptible kernel. EXPERT exposes the option and the
+# preemption choice has to be static, so dynamic preemption is turned off.
+configure_rt() {
+  [ "$RT" = "1" ] || return 0
+  if [ "$(versionToInt "$LINUX_VER")" -lt "$(versionToInt 6.12)" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --rt requires kernel 6.12 or newer"
+  fi
+  scripts/config --enable EXPERT
+  scripts/config --enable PREEMPT_RT
+  scripts/config --enable PREEMPT
+  scripts/config --disable PREEMPT_DYNAMIC
+  scripts/config --disable PREEMPT_NONE
+  scripts/config --disable PREEMPT_VOLUNTARY
+  scripts/config --disable PREEMPT_LAZY
+}
+
 assert_hz() {
   [ -n "$HZ_OVERRIDE" ] || return 0
   local got
@@ -2552,6 +2585,20 @@ assert_sched_ext() {
   [ "$got" = "y" ] || fatal "sched_ext: CONFIG_SCHED_CLASS_EXT is '${got}', expected 'y'"
   got=$(scripts/config --state DEBUG_INFO_BTF)
   [ "$got" = "y" ] || fatal "sched_ext: CONFIG_DEBUG_INFO_BTF is '${got}', expected 'y'"
+}
+
+assert_rt() {
+  [ "$RT" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state PREEMPT_RT)
+  [ "$got" = "y" ] || fatal "RT: CONFIG_PREEMPT_RT is '${got}', expected 'y'"
+  got=$(scripts/config --state PREEMPTION)
+  [ "$got" = "y" ] || fatal "RT: CONFIG_PREEMPTION is '${got}', expected 'y'"
+  got=$(scripts/config --state PREEMPT_DYNAMIC)
+  case "$got" in
+    n | undef) ;;
+    *) fatal "RT: CONFIG_PREEMPT_DYNAMIC is '${got}', expected 'n'" ;;
+  esac
 }
 
 install_kernel() {
@@ -2730,6 +2777,7 @@ install_kernel() {
       configure_bbr3
       configure_binder
       configure_sched_ext
+      configure_rt
       for custom_config_option in "${CUSTOM_CONFIG_OPTIONS[@]}"; do
         log_debug "Adding custom config option: \"$custom_config_option\""
         eval "$custom_config_option"
@@ -2750,6 +2798,7 @@ install_kernel() {
       assert_bbr3
       assert_binder
       assert_sched_ext
+      assert_rt
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
