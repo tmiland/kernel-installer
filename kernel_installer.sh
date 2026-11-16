@@ -81,6 +81,13 @@ CACHYOS_KEY_FINGERPRINTS=(
   E18447AC260021D31F3FF6C4C8A2A4774B8B63C4
   E8B9AA39F054E30E8290D492C3C4820857F654FE
 )
+# linux-hardened variant. The patch is generated against exactly this kernel
+# version and does not apply to newer stable releases (7.3.4 fails), so the
+# variant is pinned. Bump the version, tag, and SHA together.
+HARDENED_VERSION=7.3.1
+HARDENED_TAG=v7.3.1-hardened1
+HARDENED_PATCH_URL="https://github.com/anthraxx/linux-hardened/releases/download/${HARDENED_TAG}/linux-hardened-${HARDENED_TAG}.patch"
+HARDENED_PATCH_SHA256=c79c8364dfd3e6a4268f1dfc6e9b220c94776d6aace0a6d61dce135dcbfaead8
 # Original command-line arguments (diagnostics and the "run as root" hint)
 SCRIPT_ARGS="$*"
 # Logfile (the previous install's log is kept as $LOGFILE.1)
@@ -175,6 +182,8 @@ BINDER=${BINDER:-0}
 SCHED_EXT=${SCHED_EXT:-0}
 # PREEMPT_RT real-time kernel
 RT=${RT:-0}
+# linux-hardened variant (vanilla, pinned to HARDENED_VERSION)
+HARDENED=${HARDENED:-0}
 # Optional custom localversion suffix (without or with a leading hyphen)
 KERNEL_TAG=${KERNEL_TAG:-}
 
@@ -1363,6 +1372,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--binder               |${NORMAL}      enable Android Binder IPC and binderfs (Waydroid)"
   printf "%s\\n" "  ${YELLOW}--sched-ext            |${NORMAL}      enable sched_ext and BTF for userspace BPF schedulers"
   printf "%s\\n" "  ${YELLOW}--rt                   |${NORMAL}      build a PREEMPT_RT real-time kernel (6.12+)"
+  printf "%s\\n" "  ${YELLOW}--hardened             |${NORMAL}      apply the pinned linux-hardened patch (vanilla 7.3.1)"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
@@ -1523,6 +1533,10 @@ while [[ $# -gt 0 ]]; do
       RT=1
       shift
       ;;
+    --hardened)
+      HARDENED=1
+      shift
+      ;;
     --kernel-tag)
       require_arg "$1" "${2:-}"
       KERNEL_TAG="$2"
@@ -1596,6 +1610,18 @@ if [ "$SOURCE" = "cachyos" ]; then
   fi
   LINUX_VER="$CACHYOS_VERSION"
   LINUX_VER_NAME="CachyOS"
+  VER_SELECTED=1
+fi
+
+if [ "$HARDENED" = "1" ]; then
+  if [ "$SOURCE" != "vanilla" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --hardened requires --source vanilla"
+  fi
+  if [ "$VER_SELECTED" = "1" ] && [ "$LINUX_VER" != "$HARDENED_VERSION" ]; then
+    fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --hardened is pinned to ${HARDENED_VERSION}; remove the version option or use ${HARDENED_VERSION}"
+  fi
+  LINUX_VER="$HARDENED_VERSION"
+  LINUX_VER_NAME="Hardened"
   VER_SELECTED=1
 fi
 
@@ -2350,6 +2376,24 @@ apply_cachyos_bore_patch() {
   return 0
 }
 
+apply_hardened_patch() {
+  [ "$HARDENED" = "1" ] || return 0
+  local patch="linux-hardened.patch"
+  log_info "Applying linux-hardened ${HARDENED_TAG}"
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$HARDENED_PATCH_URL" 2>/dev/null ||
+    fatal "Could not download the linux-hardened patch"
+  if ! printf '%s  %s\n' "$HARDENED_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+    fatal "linux-hardened patch checksum mismatch (expected ${HARDENED_PATCH_SHA256})"
+  fi
+  if ! patch -p1 < "$patch" >/dev/null; then
+    fatal "linux-hardened patch failed to apply to ${LINUX_VER}"
+  fi
+  rm -f "$patch"
+  log_success "linux-hardened patch applied"
+  return 0
+}
+
 configure_cachyos_source() {
   [ "$SOURCE" = "cachyos" ] || return 0
   scripts/config --enable CACHY
@@ -2601,6 +2645,13 @@ assert_rt() {
   esac
 }
 
+assert_hardened() {
+  [ "$HARDENED" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state SECURITY_PERF_EVENTS_RESTRICT)
+  [ "$got" = "y" ] || fatal "Hardened: CONFIG_SECURITY_PERF_EVENTS_RESTRICT is '${got}', expected 'y'"
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -2726,6 +2777,7 @@ install_kernel() {
       if [ "$SOURCE" = "cachyos" ]; then
         apply_cachyos_bore_patch
       fi
+      apply_hardened_patch
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
         # shellcheck disable=SC2086
@@ -2799,6 +2851,7 @@ install_kernel() {
       assert_binder
       assert_sched_ext
       assert_rt
+      assert_hardened
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
