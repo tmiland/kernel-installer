@@ -156,6 +156,7 @@ Usage:  kernel_installer.sh [options]
   --binder               |      enable Android Binder IPC and binderfs (Waydroid)
   --sched-ext            |      enable sched_ext and BTF for userspace BPF schedulers
   --rt                   |      build a PREEMPT_RT real-time kernel (6.12+)
+  --hardened             |      apply the pinned linux-hardened patch (vanilla 7.3.1)
   --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
   --verbose              |-v   increase verbosity
   --get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
@@ -332,7 +333,8 @@ sudo ./kernel_installer.sh -d /path/to/parent \
   boot-smoked after the build.
 - This is the CachyOS base patchset plus BORE, not the full CachyOS variant
   matrix. BMQ and the remaining wiki features are separate follow-ups;
-  sched_ext and PREEMPT_RT are available through `--sched-ext` and `--rt`.
+  sched_ext, PREEMPT_RT, and linux-hardened are available through
+  `--sched-ext`, `--rt`, and `--hardened`.
 
 ### Kernel naming
 
@@ -351,6 +353,7 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 | same + native + ThinLTO | `7.3.4-cachyos-workstation-bore-native-lto` |
 | same + 600 Hz + BBR3 + Binder + sched_ext | `7.3.4-cachyos-workstation-bore-hz600-bbr3-binder-sched-ext` |
 | same + PREEMPT_RT | `7.3.4-cachyos-workstation-bore-rt` |
+| vanilla workstation + linux-hardened | `7.3.1-hardened1-vanilla-workstation` |
 | CachyOS EEVDF server | `7.3.4-cachyos-server` |
 | vanilla desktop | `7.3.4-vanilla-desktop` |
 
@@ -391,6 +394,25 @@ that sched_ext needs increase the build time and vmlinux size.
 makes almost the whole kernel preemptible for audio, robotics and industrial
 workloads, and costs throughput; use it only when you need deterministic
 latency.
+
+### Hardened variant
+
+`--hardened` builds vanilla 7.3.1 with the pinned
+[linux-hardened](https://github.com/anthraxx/linux-hardened)
+`v7.3.1-hardened1` patch, after verifying its SHA256:
+
+```bash
+sudo ./kernel_installer.sh --hardened --profile workstation
+# resulting kernel release: 7.3.1-hardened1-vanilla-workstation
+```
+
+The patch sets `EXTRAVERSION = -hardened1`, so the hardened marker comes from
+the kernel version itself. The patch is generated against exactly 7.3.1; it
+does not apply to 7.3.4. The
+variant is vanilla-only: it cannot be combined with `--source cachyos`, BORE,
+or the CachyOS-only CPU/BBR3/HZ choices. The patch adds hardening defaults
+such as `CONFIG_SECURITY_PERF_EVENTS_RESTRICT=y`; see the linux-hardened
+documentation for the full set.
 
 The flags are part of the localversion, so builds that differ only by these
 options do not collide in `/lib/modules` or DKMS:
