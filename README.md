@@ -29,7 +29,7 @@ See [Optimization profiles](#optimization-profiles), [CachyOS source and BORE](#
 Missing packages are installed when running the script.
 ```bash
 # Debian/Ubuntu
-wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates
+wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates openssl
 # Fedora/RHEL
 wget curl git rsync ca-certificates procps-ng findutils diffutils hostname bc binutils bison dwarves elfutils-devel elfutils-libelf-devel flex gawk gcc make patch openssl openssl-devel perl python3 ncurses-devel cpio kmod xz lz4 zstd rpm-build dracut grubby
 ```
@@ -157,6 +157,7 @@ Usage:  kernel_installer.sh [options]
   --sched-ext            |      enable sched_ext and BTF for userspace BPF schedulers
   --rt                   |      build a PREEMPT_RT real-time kernel (6.12+)
   --hardened             |      apply the pinned linux-hardened patch (vanilla 7.3.1)
+  --no-sign              |      disable automatic Secure Boot kernel signing
   --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
   --verbose              |-v   increase verbosity
   --get-verified-tarball |-gvt cryptographically verify kernel tarball (default)
@@ -420,6 +421,48 @@ options do not collide in `/lib/modules` or DKMS:
 ```text
 7.3.4-cachyos-workstation-bore-lto-hz600-bbr3-binder-sched-ext
 ```
+
+### Secure Boot auto-signing
+
+When a MOK key pair is present, the installer signs the kernel it installs and
+verifies the signature before finishing:
+
+```text
+Signed kernel image: /boot/vmlinuz-7.3.4-...
+```
+
+Defaults are `/var/lib/shim-signed/mok/MOK.priv` and `MOK.der` (the pair
+created by Debian/Ubuntu's `update-secureboot-policy`); override them with
+`SIGNING_KEY` / `SIGNING_CERT` (a PEM certificate is also accepted), or pass
+`--no-sign` to skip signing. Install `sbsigntool` (Debian/Ubuntu) or
+`sbsigntools` (Fedora/RHEL, EPEL) first; it is not in the dependency list.
+When the key pair or `sbsign`/`sbverify` is missing while Secure Boot is
+enabled, the install stops instead of producing an unbootable kernel; with
+Secure Boot disabled it warns and continues.
+
+The key **must be RSA**. Debian's shim is built without EC support, so an
+ECDSA-signed kernel signs fine but is rejected at boot with `bad shim
+signature`. The installer refuses to sign with a non-RSA certificate; pass
+`--no-sign` if that is intentional.
+
+The installer also writes `/etc/dkms/framework.conf.d/secure-boot.conf` before
+installing the packages, so modules built by the kernel postinst or a later
+`dkms autoinstall` are signed with the same key. An existing drop-in with
+different content is left untouched. Automatic module signing needs DKMS 3 or
+newer; older versions ignore `framework.conf.d` and the installer warns.
+
+Enroll the key once, then enable Secure Boot in the firmware:
+
+```bash
+sudo mokutil --import /var/lib/shim-signed/mok/MOK.der  # reboot, enroll in MOK manager
+mokutil --sb-state                                      # SecureBoot enabled
+sbverify --list /boot/vmlinuz-<release>                 # the release just installed
+```
+
+kbuild has no hook for signing the kernel image (`CONFIG_MODULE_SIG_KEY` covers
+modules only), so signing runs on the installed `/boot/vmlinuz-<release>` after
+the package is unpacked. A failed signing or verification step is reported as
+an installation error rather than leaving the kernel silently unsigned.
 
 ### Custom configuration directives
 
