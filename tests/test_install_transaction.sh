@@ -34,6 +34,8 @@ run_case() {
     # shellcheck disable=SC2329
     log_error() { :; }
     # shellcheck disable=SC2329
+    sign_installed_kernel() { :; }
+    # shellcheck disable=SC2329
     fatal() { echo "fatal: $1" >&2; exit 1; }
     DISTRO_GROUP=$distro LINUX_VER=$ver LINUX_FULL_VER=$ver INSTALL='apt-get install -y'
     eval "$block"

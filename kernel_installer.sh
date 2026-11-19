@@ -184,6 +184,12 @@ SCHED_EXT=${SCHED_EXT:-0}
 RT=${RT:-0}
 # linux-hardened variant (vanilla, pinned to HARDENED_VERSION)
 HARDENED=${HARDENED:-0}
+# Automatic Secure Boot signing: sign the installed kernel and DKMS modules
+# with the local MOK key when it exists. --no-sign disables it.
+NO_SIGN=${NO_SIGN:-0}
+SIGNING_KEY=${SIGNING_KEY:-/var/lib/shim-signed/mok/MOK.priv}
+SIGNING_CERT=${SIGNING_CERT:-/var/lib/shim-signed/mok/MOK.der}
+SIGNING_ACTIVE=${SIGNING_ACTIVE:-0}
 # Optional custom localversion suffix (without or with a leading hyphen)
 KERNEL_TAG=${KERNEL_TAG:-}
 
@@ -1373,6 +1379,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--sched-ext            |${NORMAL}      enable sched_ext and BTF for userspace BPF schedulers"
   printf "%s\\n" "  ${YELLOW}--rt                   |${NORMAL}      build a PREEMPT_RT real-time kernel (6.12+)"
   printf "%s\\n" "  ${YELLOW}--hardened             |${NORMAL}      apply the pinned linux-hardened patch (vanilla 7.3.1)"
+  printf "%s\\n" "  ${YELLOW}--no-sign              |${NORMAL}      disable automatic Secure Boot kernel signing"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
   printf "%s\\n" "  ${YELLOW}--get-verified-tarball |-gvt${NORMAL} cryptographically verify kernel tarball (default)"
@@ -1535,6 +1542,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hardened)
       HARDENED=1
+      shift
+      ;;
+    --no-sign)
+      NO_SIGN=1
       shift
       ;;
     --kernel-tag)
@@ -1858,7 +1869,7 @@ if [[ $DISTRO_GROUP == "Debian" ]]; then
   # Build-Depends-Arch since Linux 6.13, so dpkg-checkbuilddeps aborts
   # `make bindeb-pkg` without it -- minimal Debian/Ubuntu images do not
   # ship python3 (it was reported as an unmet build dependency on 7.2.11).
-  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates"
+  INSTALL_PKGS="wget curl git rsync fakeroot cpio kmod build-essential patch libncurses-dev xz-utils zstd libssl-dev bc lz4 libelf-dev flex bison gawk debhelper dpkg-dev procps apt-transport-https libdw-dev python3 ca-certificates openssl"
   #INSTALL_PKGS="build-essential fakeroot rsync git wget curl"
   # Build Dependencies
   #BUILD_DEP_PKGS="linux"
@@ -2484,6 +2495,215 @@ check_dkms_release() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Secure Boot signing
+# ---------------------------------------------------------------------------
+# kbuild has no kernel-image signing hook (CONFIG_MODULE_SIG_KEY only signs
+# modules), so the installed /boot/vmlinuz-<release> is signed after the
+# package is unpacked. shim verifies RSA Authenticode signatures only, hence
+# the RSA check: an ECDSA-signed kernel signs fine but does not boot.
+secure_boot_enabled() {
+  local dir=${EFIVARS_DIR:-/sys/firmware/efi/efivars} f
+  for f in "$dir"/SecureBoot-*; do
+    [ -f "$f" ] || continue
+    [ "$(od -An -t u1 -j 4 -N 1 "$f" 2>/dev/null | tr -d ' ')" = "1" ] && return 0
+  done
+  return 1
+}
+
+detect_signing() {
+  local subject cert_text mok_out der
+
+  SIGNING_ACTIVE=0
+  if [ "$NO_SIGN" = "1" ]; then
+    log_info "Secure Boot signing disabled by --no-sign"
+    return 0
+  fi
+  if [ ! -f "$SIGNING_KEY" ] || [ ! -f "$SIGNING_CERT" ]; then
+    if secure_boot_enabled; then
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Secure Boot is enabled but ${SIGNING_KEY} / ${SIGNING_CERT} is missing; the new kernel would be refused at boot. Install an RSA MOK key or pass --no-sign."
+    fi
+    log_debug "Secure Boot signing: no MOK key at ${SIGNING_KEY}; skipping"
+    return 0
+  fi
+  if ! command -v sbsign >/dev/null 2>&1 || ! command -v sbverify >/dev/null 2>&1; then
+    if secure_boot_enabled; then
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Secure Boot is enabled but sbsign/sbverify are missing; install sbsigntool (sbsigntools on Fedora/RHEL) or pass --no-sign."
+    fi
+    log_warning "Secure Boot signing: sbsign/sbverify not found; the kernel will NOT be signed"
+    return 0
+  fi
+  # Resolve before install_kernel changes directory; the DKMS drop-in needs
+  # absolute paths too.
+  SIGNING_KEY=$(readlink -f "$SIGNING_KEY")
+  SIGNING_CERT=$(readlink -f "$SIGNING_CERT")
+  cert_text=$(openssl x509 -in "$SIGNING_CERT" -noout -text 2>/dev/null) || cert_text=""
+  case "$cert_text" in
+    *"Public Key Algorithm: rsaEncryption"*) ;;
+    *)
+      fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Secure Boot signing: ${SIGNING_CERT} is missing or not an RSA certificate. shim cannot verify ECDSA signatures; use an RSA MOK key or pass --no-sign."
+      ;;
+  esac
+  SIGNING_ACTIVE=1
+  if command -v mokutil >/dev/null 2>&1; then
+    der=$(mktemp) || der=""
+    if [ -n "$der" ] && openssl x509 -in "$SIGNING_CERT" -outform DER -out "$der" 2>/dev/null; then
+      mok_out=$(mokutil --test-key "$der" 2>&1 || true)
+      case "$mok_out" in
+        *"is already enrolled"*) ;;
+        *"is not enrolled"*)
+          log_warning "MOK: ${SIGNING_CERT} is not enrolled; Secure Boot will reject the signed kernel until it is"
+          ;;
+      esac
+    fi
+    rm -f "$der"
+  fi
+  subject=$(openssl x509 -in "$SIGNING_CERT" -noout -subject 2>/dev/null | sed 's/^subject= *//')
+  log_info "Secure Boot signing enabled: ${subject:-$SIGNING_CERT}"
+}
+
+# Print every kernel image the boot loader may use for a release: the
+# conventional /boot/vmlinuz-<release> and the linux= target of any matching
+# Boot Loader Specification entry (systemd-boot, GRUB blscfg).
+collect_kernel_images() {
+  local release=$1 boot_dir=$2 dir root entry line key path candidate
+
+  if [ -f "${boot_dir}/vmlinuz-${release}" ]; then
+    printf '%s\n' "${boot_dir}/vmlinuz-${release}"
+  fi
+  for dir in "${boot_dir}/loader/entries" "${boot_dir}/efi/loader/entries"; do
+    root=${dir%/loader/entries}
+    for entry in "$dir"/*"${release}"*.conf; do
+      [ -f "$entry" ] || continue
+      while IFS= read -r line; do
+        read -r key path _ <<<"$line"
+        [ "$key" = "linux" ] || continue
+        [ -n "$path" ] || continue
+        case "$path" in
+          /*)
+            if [ -f "$path" ]; then
+              candidate=$path
+            else
+              candidate="${root%/}/${path#/}"
+            fi
+            ;;
+          *) candidate="${root%/}/${path}" ;;
+        esac
+        [ -f "$candidate" ] && printf '%s\n' "$candidate"
+      done <"$entry"
+    done
+  done
+}
+
+sign_kernel_image() {
+  local image=$1 tmp signed cert_pem err
+  local dir i
+
+  [ -f "$image" ] || {
+    log_error "Secure Boot signing: ${image} not found; the kernel is NOT signed"
+    return 1
+  }
+  # Sign a hidden copy in the same directory so the final rename is atomic and
+  # the boot loader's scan never sees a partial image. -L dereferences a
+  # symlinked image so the link target is never modified.
+  dir=$(dirname "$image")
+  tmp=$(mktemp "${dir}/.$(basename "$image").XXXXXX") || {
+    log_error "Secure Boot signing: cannot create a temporary file next to ${image}"
+    return 1
+  }
+  signed="${tmp}.signed"
+  cert_pem="${tmp}.pem"
+  if ! cp -pL "$image" "$tmp"; then
+    log_error "Secure Boot signing: cannot copy ${image}"
+    rm -f "$tmp"
+    return 1
+  fi
+  # sbsign appends another signature to an already-signed image; strip them all.
+  for i in 1 2 3 4; do
+    sbattach --remove "$tmp" >/dev/null 2>&1 || break
+  done
+  # sbsign and sbverify only load certificates as PEM; MOK.der is DER.
+  if ! err=$(openssl x509 -in "$SIGNING_CERT" -out "$cert_pem" 2>&1); then
+    log_error "Secure Boot signing: cannot convert ${SIGNING_CERT} to PEM: $(printf '%s\n' "$err" | tail -n 1)"
+    rm -f "$tmp" "$cert_pem"
+    return 1
+  fi
+  if ! err=$(sbsign --key "$SIGNING_KEY" --cert "$cert_pem" --output "$signed" "$tmp" 2>&1); then
+    log_error "Secure Boot signing failed for ${image}: $(printf '%s\n' "$err" | tail -n 1)"
+    rm -f "$tmp" "$signed" "$cert_pem"
+    return 1
+  fi
+  if ! err=$(sbverify --cert "$cert_pem" "$signed" 2>&1); then
+    log_error "Secure Boot signature verification failed for ${image}: $(printf '%s\n' "$err" | tail -n 1)"
+    rm -f "$tmp" "$signed" "$cert_pem"
+    return 1
+  fi
+  if [ "$(sbverify --list "$signed" 2>/dev/null | grep -c '^signature')" -ne 1 ]; then
+    log_error "Secure Boot signing: ${image} does not carry exactly one signature"
+    rm -f "$tmp" "$signed" "$cert_pem"
+    return 1
+  fi
+  chmod --reference="$image" "$signed" 2>/dev/null || chmod 644 "$signed"
+  chown --reference="$image" "$signed" 2>/dev/null || true
+  if ! mv -f "$signed" "$image"; then
+    log_error "Secure Boot signing: cannot replace ${image}"
+    rm -f "$tmp" "$signed" "$cert_pem"
+    return 1
+  fi
+  rm -f "$tmp" "$cert_pem"
+  log_success "Signed kernel image: ${image}"
+}
+
+sign_installed_kernel() {
+  local release=$1 boot_dir=${BOOT_DIR:-/boot} images image rc=0
+
+  [ "$SIGNING_ACTIVE" = "1" ] || return 0
+  images=$(collect_kernel_images "$release" "$boot_dir" | sort -u)
+  if [ -z "$images" ]; then
+    log_error "Secure Boot signing: no installed kernel image found for ${release} under ${boot_dir}"
+    return 1
+  fi
+  while IFS= read -r image; do
+    [ -n "$image" ] || continue
+    sign_kernel_image "$image" || rc=1
+  done <<<"$images"
+  return "$rc"
+}
+
+ensure_dkms_signing_conf() {
+  local conf_dir=${DKMS_CONF_DIR:-/etc/dkms/framework.conf.d}
+  local conf="${conf_dir}/secure-boot.conf" content tmp_conf
+
+  [ "$SIGNING_ACTIVE" = "1" ] || return 0
+  content="# Managed by kernel_installer — Secure Boot module signing
+mok_signing_key=\"${SIGNING_KEY}\"
+mok_certificate=\"${SIGNING_CERT}\""
+  # DKMS 3+ reads framework.conf.d; older versions (Ubuntu 22.04) do not.
+  # The drop-in is still written so a later DKMS upgrade picks it up.
+  if [ -f /usr/sbin/dkms ] && ! grep -q 'framework.conf.d' /usr/sbin/dkms 2>/dev/null; then
+    log_warning "This DKMS version ignores ${conf_dir}; DKMS modules will not use the MOK key"
+  fi
+  if [ -f "$conf" ]; then
+    if [ "$(cat "$conf")" = "$content" ]; then
+      log_debug "DKMS Secure Boot drop-in is current: ${conf}"
+    else
+      log_warning "DKMS Secure Boot drop-in ${conf} differs; leaving it unchanged"
+    fi
+    return 0
+  fi
+  if ! mkdir -p "$conf_dir" 2>/dev/null; then
+    log_warning "Could not create ${conf_dir}; DKMS modules will not be signed"
+    return 0
+  fi
+  tmp_conf="${conf}.tmp.$$"
+  if ! printf '%s\n' "$content" >"$tmp_conf" || ! mv -f "$tmp_conf" "$conf"; then
+    rm -f "$tmp_conf"
+    log_warning "Could not write ${conf}; DKMS modules will not be signed"
+    return 0
+  fi
+  log_info "Enabled DKMS module signing in ${conf}"
+}
+
 configure_kernel_name() {
   [ -n "$KERNEL_TAG" ] || return 0
   scripts/config --set-str LOCALVERSION "$KERNEL_TAG"
@@ -2689,6 +2909,12 @@ install_kernel() {
   # run_ok "${BUILD_DEP} ${BUILD_DEP_PKGS}" "Installing build dependencies"
   log_success "Package Setup Finished"
   log_diagnostics
+
+  # Secure Boot: resolve the MOK key once packages (openssl) are installed,
+  # and configure DKMS before a kernel postinst can build modules for the new
+  # kernel with DKMS's own unrelated key.
+  detect_signing
+  ensure_dkms_signing_conf
 
   # Reap any clingy processes (like spinner forks)
   # get the parent pids (as those are the problem)
@@ -2937,6 +3163,10 @@ install_kernel() {
     fi
     run_ok "${INSTALL} ./linux-headers-\"${LINUX_FULL_VER}\"_*.deb ./linux-image-\"${LINUX_FULL_VER}\"_*.deb" "Installing Kernel image and headers: ${LINUX_VER}"
   fi
+  if ! sign_installed_kernel "$LINUX_FULL_VER"; then
+    log_error "Kernel ${LINUX_FULL_VER} is installed but NOT signed; Secure Boot will refuse to boot it."
+    return 1
+  fi
   log_success "Installation finished"
   check_dkms_release "$LINUX_FULL_VER"
   # else
@@ -3066,6 +3296,7 @@ else
     remove_install_dir "$INSTALL_DIR" ||
       log_warning "Could not completely remove $INSTALL_DIR."
   fi
+  exit 1
 fi
 
 exit
