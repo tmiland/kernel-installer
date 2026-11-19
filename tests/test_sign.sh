@@ -122,12 +122,27 @@ wrapper_fn=$(sed -n '/^sign_installed_kernel() {/,/^}/p' "$SCRIPT")
 check "collector covers conventional and BLS images" \
   grep -q 'loader/entries' <<<"$collect_fn"
 if grep -q 'BOOT_DIR' <<<"$wrapper_fn" &&
-  [ -f "/boot/vmlinuz-$(uname -r)" ] &&
-  command -v sbsign >/dev/null && command -v sbverify >/dev/null; then
+  command -v sbsign >/dev/null && command -v sbverify >/dev/null &&
+  command -v python3 >/dev/null; then
   mkdir -p "$tmp/boot"
+  # Minimal PE32+ fixture: sbsign needs a PE, and /boot/vmlinuz is root-only on
+  # CI runners. This keeps the signing tests unprivileged and deterministic.
+  python3 - "$tmp/mini.efi" <<'PY'
+import struct, sys
+dos = bytearray(0x40); dos[0:2] = b'MZ'; struct.pack_into('<I', dos, 0x3c, 0x40)
+coff = b'PE\0\0' + struct.pack('<HHIIIHH', 0x8664, 1, 0, 0, 0, 0xF0, 0x22)
+opt = bytearray(0xF0)
+struct.pack_into('<HBBIIIII', opt, 0, 0x20B, 14, 0, 0x200, 0x200, 0, 0x1000, 0x1000)
+struct.pack_into('<QII', opt, 24, 0x140000000, 0x1000, 0x200)
+struct.pack_into('<HHHHHHIIIIHHQQQQII', opt, 40, 6, 0, 0, 0, 6, 0, 0, 0x2000, 0x200, 0, 0x0A, 0,
+                 0x100000, 0x1000, 0x100000, 0x1000, 0, 16)
+sec = b'.text\0\0\0' + struct.pack('<IIIIIIHHI', 0x10, 0x1000, 0x200, 0x200, 0, 0, 0, 0, 0x60000020)
+hdr = bytes(dos) + coff + bytes(opt) + sec
+open(sys.argv[1], 'wb').write(hdr + b'\x90' * (0x200 - len(hdr)) + b'\xC3' + b'\x90' * 0x1FF)
+PY
   openssl req -new -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
     -subj "/CN=test-sign" -keyout "$tmp/test.key" -out "$tmp/test.pem" 2>/dev/null
-  cp "/boot/vmlinuz-$(uname -r)" "$tmp/boot/vmlinuz-test-sign"
+  cp "$tmp/mini.efi" "$tmp/boot/vmlinuz-test-sign"
   (
     # shellcheck disable=SC2034  # consumed by the extracted function
     SIGNING_ACTIVE=1 BOOT_DIR="$tmp/boot" SIGNING_KEY="$tmp/test.key" SIGNING_CERT="$tmp/test.pem"
@@ -148,7 +163,7 @@ if grep -q 'BOOT_DIR' <<<"$wrapper_fn" &&
 
   # DER certificate (the default): sbsign needs PEM, so the signer converts.
   openssl x509 -in "$tmp/test.pem" -outform DER -out "$tmp/test.der"
-  cp "/boot/vmlinuz-$(uname -r)" "$tmp/boot/vmlinuz-test-sign"
+  cp "$tmp/mini.efi" "$tmp/boot/vmlinuz-test-sign"
   (
     # shellcheck disable=SC2034  # consumed by the extracted function
     SIGNING_ACTIVE=1 BOOT_DIR="$tmp/boot" SIGNING_KEY="$tmp/test.key" SIGNING_CERT="$tmp/test.der"
@@ -166,7 +181,7 @@ if grep -q 'BOOT_DIR' <<<"$wrapper_fn" &&
     sbverify --cert "$tmp/test.pem" "$tmp/boot/vmlinuz-test-sign"
 
   # A failed signing must leave the original image byte-identical.
-  cp "/boot/vmlinuz-$(uname -r)" "$tmp/boot/vmlinuz-test-sign"
+  cp "$tmp/mini.efi" "$tmp/boot/vmlinuz-test-sign"
   before=$(sha256sum "$tmp/boot/vmlinuz-test-sign")
   (
     # shellcheck disable=SC2034  # consumed by the extracted function
@@ -188,7 +203,7 @@ if grep -q 'BOOT_DIR' <<<"$wrapper_fn" &&
 
   # A BLS entry points at its own copy of the kernel; that copy must be signed.
   mkdir -p "$tmp/boot/loader/entries"
-  cp "/boot/vmlinuz-$(uname -r)" "$tmp/boot/vmlinuz-test-blscopy"
+  cp "$tmp/mini.efi" "$tmp/boot/vmlinuz-test-blscopy"
   printf 'title test\nlinux /vmlinuz-test-blscopy\n' >"$tmp/boot/loader/entries/test-sign.conf"
   (
     # shellcheck disable=SC2034  # consumed by the extracted function
@@ -206,7 +221,7 @@ if grep -q 'BOOT_DIR' <<<"$wrapper_fn" &&
   check "a BLS entry's kernel is signed" \
     sbverify --cert "$tmp/test.pem" "$tmp/boot/vmlinuz-test-blscopy"
 else
-  echo "skip: kernel image signing (needs BOOT_DIR support, /boot image and sbsigntool)"
+  echo "skip: kernel image signing (needs BOOT_DIR support, sbsigntool and python3)"
 fi
 
 # --- behavior: Secure Boot state handling --------------------------------
