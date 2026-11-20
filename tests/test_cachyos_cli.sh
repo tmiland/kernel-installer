@@ -13,6 +13,9 @@ check() {
 out=$(setsid bash "$SCRIPT" --sched bore </dev/null 2>&1)
 check "bore without a CachyOS source is rejected" grep -q 'requires --source cachyos' <<<"$out"
 
+out=$(setsid bash "$SCRIPT" --sched bmq </dev/null 2>&1)
+check "bmq without a CachyOS source is rejected" grep -q 'requires --source cachyos' <<<"$out"
+
 out=$(setsid bash "$SCRIPT" --base-config cachyos </dev/null 2>&1)
 check "cachyos base config without the source is rejected" grep -q 'requires --source cachyos' <<<"$out"
 
@@ -40,6 +43,7 @@ check "an invalid kernel tag is rejected" grep -q 'must use lowercase' <<<"$out"
 out=$(setsid bash "$SCRIPT" --help </dev/null 2>&1)
 check "help documents --source" grep -q -- '--source' <<<"$out"
 check "help documents --sched" grep -q -- '--sched' <<<"$out"
+check "help documents bmq" grep -q -- 'bmq' <<<"$out"
 check "help documents --cpu" grep -q -- '--cpu' <<<"$out"
 check "help documents --lto" grep -q -- '--lto' <<<"$out"
 check "help documents --kernel-tag" grep -q -- '--kernel-tag' <<<"$out"
