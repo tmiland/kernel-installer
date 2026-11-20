@@ -76,6 +76,8 @@ CACHYOS_CONFIG_SHA256=81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92
 CACHYOS_PATCHES_REV=21d721415790e6717b2ece16e82e08eb98d16c00
 CACHYOS_BORE_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-bore-cachy.patch"
 CACHYOS_BORE_PATCH_SHA256=d2eaa8e8dbf1f56bfb304f8b437a7dc30a65408f90a93701367baf8adc2173b4
+CACHYOS_BMQ_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-prjc-cachy.patch"
+CACHYOS_BMQ_PATCH_SHA256=0d3c61ecfc84c4b7064e2336ca2b025fa2fa109bfacb37cf370de885db34ce8c
 CACHYOS_KEYRING_FILE=src/keys/cachyos.asc
 CACHYOS_KEY_FINGERPRINTS=(
   E18447AC260021D31F3FF6C4C8A2A4774B8B63C4
@@ -184,6 +186,9 @@ SCHED_EXT=${SCHED_EXT:-0}
 RT=${RT:-0}
 # linux-hardened variant (vanilla, pinned to HARDENED_VERSION)
 HARDENED=${HARDENED:-0}
+# AutoFDO profile path (clang sample-use profile) or a profiling build
+AUTOFDO_PROFILE=${AUTOFDO_PROFILE:-}
+AUTOFDO_COLLECT=${AUTOFDO_COLLECT:-0}
 # Automatic Secure Boot signing: sign the installed kernel and DKMS modules
 # with the local MOK key when it exists. --no-sign disables it.
 NO_SIGN=${NO_SIGN:-0}
@@ -915,6 +920,8 @@ build_kernel_tag() {
   [ "$BINDER" = "1" ] && tag+="-binder"
   [ "$SCHED_EXT" = "1" ] && tag+="-sched-ext"
   [ "$RT" = "1" ] && tag+="-rt"
+  [ -n "$AUTOFDO_PROFILE" ] && tag+="-autofdo"
+  [ "$AUTOFDO_COLLECT" = "1" ] && tag+="-autofdo-collect"
   KERNEL_TAG="$tag"
 }
 
@@ -1370,7 +1377,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--list-profiles        |-lp${NORMAL}  list optimization profiles and exit"
   printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, cachyos, or none"
   printf "%s\\n" "  ${YELLOW}--source               |${NORMAL}      kernel source: vanilla (kernel.org) or cachyos (pinned)"
-  printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf or bore"
+  printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf, bore, or bmq"
   printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
   printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
   printf "%s\\n" "  ${YELLOW}--hz                   |${NORMAL}      timer frequency: 100, 250, 300, 500, 600, 750, 1000"
@@ -1379,6 +1386,8 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--sched-ext            |${NORMAL}      enable sched_ext and BTF for userspace BPF schedulers"
   printf "%s\\n" "  ${YELLOW}--rt                   |${NORMAL}      build a PREEMPT_RT real-time kernel (6.12+)"
   printf "%s\\n" "  ${YELLOW}--hardened             |${NORMAL}      apply the pinned linux-hardened patch (vanilla 7.3.1)"
+  printf "%s\\n" "  ${YELLOW}--autofdo <profile>    |${NORMAL}      build with an AutoFDO sample profile (clang 17+)"
+  printf "%s\\n" "  ${YELLOW}--autofdo-collect      |${NORMAL}      build a profiling kernel for AutoFDO (clang 17+)"
   printf "%s\\n" "  ${YELLOW}--no-sign              |${NORMAL}      disable automatic Secure Boot kernel signing"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
@@ -1495,8 +1504,8 @@ while [[ $# -gt 0 ]]; do
     --sched)
       require_arg "$1" "${2:-}"
       case "$2" in
-        eevdf | bore) KERNEL_SCHED="$2" ;;
-        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown scheduler: $2 (eevdf or bore)" ;;
+        eevdf | bore | bmq) KERNEL_SCHED="$2" ;;
+        *) fatal "${RED}${BALLOT_X}Fatal:${NORMAL} Unknown scheduler: $2 (eevdf, bore, or bmq)" ;;
       esac
       shift 2
       ;;
@@ -1542,6 +1551,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hardened)
       HARDENED=1
+      shift
+      ;;
+    --autofdo)
+      require_arg "$1" "${2:-}"
+      AUTOFDO_PROFILE="$2"
+      shift 2
+      ;;
+    --autofdo-collect)
+      AUTOFDO_COLLECT=1
       shift
       ;;
     --no-sign)
@@ -1611,8 +1629,8 @@ if [ ${#POSITIONAL_ARGS[@]} -gt 0 ]; then
   set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 fi
 
-if [ "$KERNEL_SCHED" = "bore" ] && [ "$SOURCE" != "cachyos" ]; then
-  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched bore requires --source cachyos"
+if [ "$KERNEL_SCHED" != "eevdf" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched $KERNEL_SCHED requires --source cachyos"
 fi
 
 if [ "$SOURCE" = "cachyos" ]; then
@@ -1634,6 +1652,14 @@ if [ "$HARDENED" = "1" ]; then
   LINUX_VER="$HARDENED_VERSION"
   LINUX_VER_NAME="Hardened"
   VER_SELECTED=1
+fi
+
+if [ -n "$AUTOFDO_PROFILE" ] && [ "$AUTOFDO_COLLECT" = "1" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --autofdo and --autofdo-collect cannot be combined"
+fi
+if [ -n "$AUTOFDO_PROFILE" ]; then
+  [ -f "$AUTOFDO_PROFILE" ] || fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --autofdo profile not found: ${AUTOFDO_PROFILE}"
+  AUTOFDO_PROFILE=$(realpath -- "$AUTOFDO_PROFILE")
 fi
 
 if [ "$BASE_CONFIG" = "cachyos" ] && [ "$SOURCE" != "cachyos" ]; then
@@ -1676,7 +1702,7 @@ if [ "$BBR3" = "1" ] && [ "$SOURCE" != "cachyos" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --bbr3 requires --source cachyos"
 fi
 
-if [ "$LTO" != "none" ]; then
+if [ "$LTO" != "none" ] || [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ]; then
   MAKE_LLVM="LLVM=1 LLVM_IAS=1"
 else
   MAKE_LLVM=""
@@ -1908,8 +1934,8 @@ else
   exit 1;
 fi
 
-if [ "$LTO" != "none" ]; then
-  # LTO needs clang/LLD; install them only when requested.
+if [ "$LTO" != "none" ] || [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ]; then
+  # LTO and AutoFDO need clang/LLD; install them only when requested.
   INSTALL_PKGS+=" clang lld llvm"
 fi
 
@@ -2387,6 +2413,22 @@ apply_cachyos_bore_patch() {
   return 0
 }
 
+apply_cachyos_bmq_patch() {
+  [ "$SOURCE" = "cachyos" ] && [ "$KERNEL_SCHED" = "bmq" ] || return 0
+  local patch="cachyos-bmq.patch"
+  # shellcheck disable=SC2086
+  ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$CACHYOS_BMQ_PATCH_URL" 2>/dev/null ||
+    fatal "Could not download the BMQ scheduler patch"
+  if ! printf '%s  %s\n' "$CACHYOS_BMQ_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+    fatal "BMQ scheduler patch checksum mismatch (expected ${CACHYOS_BMQ_PATCH_SHA256})"
+  fi
+  if ! patch -p1 < "$patch" >/dev/null; then
+    fatal "BMQ scheduler patch failed to apply to the CachyOS source"
+  fi
+  log_success "BMQ scheduler patch applied"
+  return 0
+}
+
 apply_hardened_patch() {
   [ "$HARDENED" = "1" ] || return 0
   local patch="linux-hardened.patch"
@@ -2408,11 +2450,22 @@ apply_hardened_patch() {
 configure_cachyos_source() {
   [ "$SOURCE" = "cachyos" ] || return 0
   scripts/config --enable CACHY
-  if [ "$KERNEL_SCHED" = "bore" ]; then
-    scripts/config --enable SCHED_BORE
-  else
-    scripts/config --disable SCHED_BORE
-  fi
+  case "$KERNEL_SCHED" in
+    bore)
+      scripts/config --enable SCHED_BORE
+      scripts/config --disable SCHED_ALT
+      ;;
+    bmq)
+      scripts/config --disable SCHED_BORE
+      scripts/config --enable SCHED_ALT
+      scripts/config --enable SCHED_BMQ
+      scripts/config --disable SCHED_PDS
+      ;;
+    *)
+      scripts/config --disable SCHED_BORE
+      scripts/config --disable SCHED_ALT
+      ;;
+  esac
 }
 
 assert_cachyos_source() {
@@ -2420,10 +2473,23 @@ assert_cachyos_source() {
   local got
   got=$(scripts/config --state CACHY)
   [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_CACHY is '${got}', expected 'y'"
-  if [ "$KERNEL_SCHED" = "bore" ]; then
-    got=$(scripts/config --state SCHED_BORE)
-    [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_SCHED_BORE is '${got}', expected 'y'"
-  fi
+  case "$KERNEL_SCHED" in
+    bore)
+      got=$(scripts/config --state SCHED_BORE)
+      [ "$got" = "y" ] || fatal "CachyOS source: CONFIG_SCHED_BORE is '${got}', expected 'y'"
+      ;;
+    bmq)
+      got=$(scripts/config --state SCHED_ALT)
+      [ "$got" = "y" ] || fatal "BMQ: CONFIG_SCHED_ALT is '${got}', expected 'y'"
+      got=$(scripts/config --state SCHED_BMQ)
+      [ "$got" = "y" ] || fatal "BMQ: CONFIG_SCHED_BMQ is '${got}', expected 'y'"
+      got=$(scripts/config --state SCHED_PDS)
+      case "$got" in
+        n | undef) ;;
+        *) fatal "BMQ: CONFIG_SCHED_PDS is '${got}', expected 'n'" ;;
+      esac
+      ;;
+  esac
 }
 
 configure_cpu() {
@@ -2739,6 +2805,14 @@ configure_lto() {
   esac
 }
 
+configure_autofdo() {
+  [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state AUTOFDO_CLANG)
+  [ "$got" != "undef" ] || fatal "AutoFDO: CONFIG_AUTOFDO_CLANG is not available in this kernel source (use a 7.x source)"
+  scripts/config --enable AUTOFDO_CLANG
+}
+
 assert_lto() {
   [ "$LTO" = "none" ] && return 0
   local got
@@ -2872,6 +2946,13 @@ assert_hardened() {
   [ "$got" = "y" ] || fatal "Hardened: CONFIG_SECURITY_PERF_EVENTS_RESTRICT is '${got}', expected 'y'"
 }
 
+assert_autofdo() {
+  [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ] || return 0
+  local got
+  got=$(scripts/config --state AUTOFDO_CLANG)
+  [ "$got" = "y" ] || fatal "AutoFDO: CONFIG_AUTOFDO_CLANG is '${got}', expected 'y'"
+}
+
 install_kernel() {
   if [ "$INTERACTIVE_MODE" = "on" ]; then
     clear
@@ -3003,6 +3084,7 @@ install_kernel() {
       if [ "$SOURCE" = "cachyos" ]; then
         apply_cachyos_bore_patch
       fi
+      apply_cachyos_bmq_patch
       apply_hardened_patch
       if [ "$CONFIG_INTERACTIVE" = "1" ]; then
         log_info "Running make $CONFIG_OPTION; save the configuration and exit to continue."
@@ -3045,6 +3127,7 @@ install_kernel() {
       fi
       configure_cpu
       configure_lto
+      configure_autofdo
       configure_kernel_name
       if [ -n "$PROFILE" ]; then
         log_info "Applying optimization profile: ${PROFILE}"
@@ -3078,6 +3161,7 @@ install_kernel() {
       assert_sched_ext
       assert_rt
       assert_hardened
+      assert_autofdo
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -3093,6 +3177,9 @@ install_kernel() {
       # Remember where the build output starts in the log, and handle a
       # failure here (instead of run_ok's tail) to point at the real error
       build_log_start=$(wc -l < "$RUN_LOG" 2>/dev/null || echo 0)
+      if [ -n "$AUTOFDO_PROFILE" ]; then
+        export CLANG_AUTOFDO_PROFILE="$AUTOFDO_PROFILE"
+      fi
       if ! RUN_ERRORS_FATAL='' run_ok "echo $DEF_COM_NUM | ${MAKE_LLVM:+$MAKE_LLVM }make $build_target -j${NPROC}" "Compiling The Linux Kernel source code..."; then
         report_build_failure "$build_log_start"
         exit 1
@@ -3137,6 +3224,19 @@ install_kernel() {
     log_warning "Could not read the kernel release from the built package or the configured tree; using ${LINUX_FULL_VER}. The built packages may be named differently."
   fi
   log_info "Kernel release: ${LINUX_FULL_VER}"
+  if [ "$AUTOFDO_COLLECT" = "1" ]; then
+    vmlinux_path="$INSTALL_DIR/linux-${LINUX_VER}/vmlinux"
+    vmlinux_dest="$(dirname "$INSTALL_DIR")/vmlinux-${LINUX_FULL_VER}"
+    if [ -f "$vmlinux_path" ]; then
+      if cp -- "$vmlinux_path" "$vmlinux_dest"; then
+        log_info "AutoFDO vmlinux saved to ${vmlinux_dest}"
+      else
+        log_warning "AutoFDO: could not save ${vmlinux_path} to ${vmlinux_dest}"
+      fi
+    else
+      log_warning "AutoFDO: ${vmlinux_path} not found; the profile cannot be generated without it"
+    fi
+  fi
   # Install
   # Install through the package manager so that runtime dependencies of the
   # kernel packages (kmod, linux-base, initramfs-tools, ...) are pulled in on
