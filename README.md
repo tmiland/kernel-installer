@@ -148,7 +148,7 @@ Usage:  kernel_installer.sh [options]
   --list-profiles        |-lp  list optimization profiles and exit
   --base-config          |-bc  profile base config: running, a path, cachyos, or none
   --source               |      kernel source: vanilla (kernel.org) or cachyos (pinned)
-  --sched                |      scheduler for the cachyos source: eevdf or bore
+  --sched                |      scheduler for the cachyos source: eevdf, bore, or bmq
   --cpu                  |      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4
   --lto                  |      LTO: none, thin, or full (requires clang/lld)
   --hz                   |      timer frequency: 100, 250, 300, 500, 600, 750, 1000
@@ -157,6 +157,8 @@ Usage:  kernel_installer.sh [options]
   --sched-ext            |      enable sched_ext and BTF for userspace BPF schedulers
   --rt                   |      build a PREEMPT_RT real-time kernel (6.12+)
   --hardened             |      apply the pinned linux-hardened patch (vanilla 7.3.1)
+  --autofdo <profile>    |      build with an AutoFDO sample profile (clang 17+)
+  --autofdo-collect      |      build a profiling kernel for AutoFDO (clang 17+)
   --no-sign              |      disable automatic Secure Boot kernel signing
   --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
   --verbose              |-v   increase verbosity
@@ -314,6 +316,10 @@ sudo ./kernel_installer.sh -d /path/to/parent \
   `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
   kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
   the BORE patch.
+- `--sched bmq` applies the pinned PRJC/BMQ patch and enables
+  `CONFIG_SCHED_ALT=y` + `CONFIG_SCHED_BMQ=y`. It requires `--source cachyos`
+  and is mutually exclusive with BORE. BMQ targets desktop interactivity; the
+  patch is pinned by SHA256 like the BORE patch.
 - CI builds and boots the BORE kernel with Clang ThinLTO on Debian 13 and
   Ubuntu 24.04, with the `workstation` profile. Native CPU tuning is available
   but is not part of the default CI matrix because it depends on the build
@@ -332,10 +338,10 @@ sudo ./kernel_installer.sh -d /path/to/parent \
   `clang`, `lld`, and `llvm` on demand, configure `LTO_CLANG_THIN`/`FULL`, and
   build with `LLVM=1 LLVM_IAS=1`; `none` is the default. The kernel is
   boot-smoked after the build.
-- This is the CachyOS base patchset plus BORE, not the full CachyOS variant
-  matrix. BMQ and the remaining wiki features are separate follow-ups;
-  sched_ext, PREEMPT_RT, and linux-hardened are available through
-  `--sched-ext`, `--rt`, and `--hardened`.
+- This is the CachyOS base patchset plus BORE or BMQ, not the full CachyOS
+  variant matrix. The remaining wiki features are separate follow-ups;
+  sched_ext, PREEMPT_RT, linux-hardened, and AutoFDO are available through
+  `--sched-ext`, `--rt`, `--hardened`, and `--autofdo`.
 
 ### Kernel naming
 
@@ -344,7 +350,7 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 `.deb` names:
 
 ```text
-<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>][-hz<n>][-bbr3][-binder][-sched-ext][-rt]
+<version>-<source>-<profile>[-<scheduler>][-<cpu>][-<lto>][-hz<n>][-bbr3][-binder][-sched-ext][-rt][-autofdo]
 ```
 
 | Build | `uname -r` |
@@ -355,6 +361,7 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 | same + 600 Hz + BBR3 + Binder + sched_ext | `7.3.4-cachyos-workstation-bore-hz600-bbr3-binder-sched-ext` |
 | same + PREEMPT_RT | `7.3.4-cachyos-workstation-bore-rt` |
 | vanilla workstation + linux-hardened | `7.3.1-hardened1-vanilla-workstation` |
+| vanilla workstation + AutoFDO | `7.3.4-vanilla-workstation-autofdo` |
 | CachyOS EEVDF server | `7.3.4-cachyos-server` |
 | vanilla desktop | `7.3.4-vanilla-desktop` |
 
@@ -421,6 +428,42 @@ options do not collide in `/lib/modules` or DKMS:
 ```text
 7.3.4-cachyos-workstation-bore-lto-hz600-bbr3-binder-sched-ext
 ```
+
+### AutoFDO
+
+AutoFDO is profile-guided optimization from hardware sampling. You build a
+profiling kernel, run a representative workload while `perf` records branch
+samples, convert the samples into an AutoFDO profile, and rebuild the kernel
+with that profile. Clang then places the hot code and branches where the CPU
+can fetch them faster. It is not a scheduler or instrumentation; the gain
+depends on how well the workload matches the profile.
+
+Requirements: clang/LLVM 17 or newer, a kernel source with
+`CONFIG_AUTOFDO_CLANG` (7.x; not 6.12), and an x86 CPU with LBR or BRS
+(Zen 3 BRS, Zen 4+ `amd_lbr_v2`).
+
+```bash
+# 1. profiling kernel (no profile yet)
+sudo ./kernel_installer.sh --autofdo-collect --profile workstation
+# reboot into it, then sample the workload
+perf record --pfm-events RETIRED_TAKEN_BRANCH_INSTRUCTIONS:k \
+  -a -N -b -c 500009 -o perf.data -- <your workload>
+# 2. convert (create_llvm_prof from the AutoFDO project)
+create_llvm_prof --binary=/path/to/vmlinux-<release> \
+  --profile=perf.data --out=autofdo.profdata
+# 3. rebuild with the profile
+sudo ./kernel_installer.sh --autofdo autofdo.profdata --profile workstation
+```
+
+The `--autofdo-collect` build saves `vmlinux-<release>` in the `--dir` parent
+directory (default `/opt`), because the profile conversion needs the
+unstripped binary. `--autofdo <profile>` passes the profile to clang and tags
+the kernel `-autofdo`; `--autofdo-collect` tags it `-autofdo-collect`.
+
+Limits: the profile is workload-specific; regenerate it when the kernel or
+the workload changes. If the source enables Rust and your `rustc` lacks
+sample-profile support, disable Rust for the AutoFDO build with
+`--custom-config 'scripts/config --disable RUST'`.
 
 ### Secure Boot auto-signing
 
