@@ -14,6 +14,9 @@ out=$(setsid bash "$SCRIPT" --sched bmq </dev/null 2>&1)
 check "bmq without a CachyOS source is rejected" \
   grep -q 'requires --source cachyos' <<<"$out"
 
+out=$(setsid bash "$SCRIPT" --sched bmq --source cachyos --sched-ext </dev/null 2>&1)
+check "bmq rejects --sched-ext" grep -q 'not available with BMQ' <<<"$out"
+
 out=$(setsid bash "$SCRIPT" --help </dev/null 2>&1)
 check "help documents bmq" grep -q -- 'bmq' <<<"$out"
 

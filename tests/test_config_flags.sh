@@ -81,7 +81,7 @@ for fn in versionToInt configure_hz configure_bbr3 configure_binder configure_sc
 done
 # shellcheck disable=SC1090
 eval "$funcs"
-export LINUX_VER=7.3.4
+export LINUX_VER=7.3.4 KERNEL_SCHED=eevdf
 has() { grep -qx -- "$1" "$CFG_LOG"; }
 
 : > "$CFG_LOG"
@@ -165,6 +165,10 @@ assert_profile workstation
 check "rt drops the THP assertions" \
   not grep -qx 'TRANSPARENT_HUGEPAGE_MADVISE=y' "$work/profile-expect"
 check "rt drops the fixed PREEMPT model" not grep -qx 'PREEMPT=y' "$work/profile-expect"
+export KERNEL_SCHED=bmq
+assert_profile workstation
+check "bmq drops the PSI assertion" not grep -qx 'PSI=y' "$work/profile-expect"
+check "bmq keeps the CFS bandwidth assertion" grep -qx 'CFS_BANDWIDTH=y' "$work/profile-expect"
 
 # --- call order ----------------------------------------------------------
 line_of() { grep -n "$1" "$SCRIPT" | head -1 | cut -d: -f1; }

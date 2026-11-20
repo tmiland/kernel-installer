@@ -953,11 +953,12 @@ profile_assert() {
 
 assert_profile() {
   local -a common=(
-    PSI=y
     ZRAM=y
     TCP_CONG_BBR=y
     NET_SCH_FQ=y
   )
+  # BMQ replaces CFS and makes PSI unavailable (Kconfig depends on !SCHED_ALT).
+  [ "$KERNEL_SCHED" != "bmq" ] && common+=(PSI=y)
   # TRANSPARENT_HUGEPAGE depends on !PREEMPT_RT, so it cannot be asserted on
   # an RT kernel; olddefconfig drops the profile's THP settings.
   if [ "$RT" != "1" ]; then
@@ -1700,6 +1701,10 @@ esac
 
 if [ "$BBR3" = "1" ] && [ "$SOURCE" != "cachyos" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --bbr3 requires --source cachyos"
+fi
+
+if [ "$KERNEL_SCHED" = "bmq" ] && [ "$SCHED_EXT" = "1" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched-ext is not available with BMQ (SCHED_ALT disables SCHED_CLASS_EXT)"
 fi
 
 if [ "$LTO" != "none" ] || [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ]; then
