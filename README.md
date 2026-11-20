@@ -159,6 +159,7 @@ Usage:  kernel_installer.sh [options]
   --hardened             |      apply the pinned linux-hardened patch (vanilla 7.3.1)
   --autofdo <profile>    |      build with an AutoFDO sample profile (clang 17+)
   --autofdo-collect      |      build a profiling kernel for AutoFDO (clang 17+)
+  --config-only          |      validate the configuration and exit before compiling
   --no-sign              |      disable automatic Secure Boot kernel signing
   --kernel-tag           |      custom localversion suffix (default: auto from source/profile)
   --verbose              |-v   increase verbosity
@@ -590,6 +591,13 @@ To uninstall previously installed kernel:
 Tested and working on: Debian 12/13, Ubuntu 22.04/24.04 and Fedora 44 (see [test-install.yml](.github/workflows/test-install.yml))
 
 - Each CI run uploads the installer log of every distro as a workflow artifact (`kernel-installer-logs-<distro>`) on the [Actions](https://github.com/tmiland/kernel-installer/actions/workflows/test-install.yml) page
+- For a fast configuration check without compiling:
+
+  ```bash
+  sudo ./kernel_installer.sh --config-only --source cachyos --sched bmq --profile workstation
+  ```
+
+  The config-only matrix runs on every PR; the full kernel build/boot matrix runs on `main` and on demand (`workflow_dispatch` with `full_build=true`).
 
 ## Maintenance
 

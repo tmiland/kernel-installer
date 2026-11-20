@@ -189,6 +189,8 @@ HARDENED=${HARDENED:-0}
 # AutoFDO profile path (clang sample-use profile) or a profiling build
 AUTOFDO_PROFILE=${AUTOFDO_PROFILE:-}
 AUTOFDO_COLLECT=${AUTOFDO_COLLECT:-0}
+# Validate the configuration and exit before compiling
+CONFIG_ONLY=${CONFIG_ONLY:-0}
 # Automatic Secure Boot signing: sign the installed kernel and DKMS modules
 # with the local MOK key when it exists. --no-sign disables it.
 NO_SIGN=${NO_SIGN:-0}
@@ -1389,6 +1391,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--hardened             |${NORMAL}      apply the pinned linux-hardened patch (vanilla 7.3.1)"
   printf "%s\\n" "  ${YELLOW}--autofdo <profile>    |${NORMAL}      build with an AutoFDO sample profile (clang 17+)"
   printf "%s\\n" "  ${YELLOW}--autofdo-collect      |${NORMAL}      build a profiling kernel for AutoFDO (clang 17+)"
+  printf "%s\\n" "  ${YELLOW}--config-only          |${NORMAL}      validate the configuration and exit before compiling"
   printf "%s\\n" "  ${YELLOW}--no-sign              |${NORMAL}      disable automatic Secure Boot kernel signing"
   printf "%s\\n" "  ${YELLOW}--kernel-tag           |${NORMAL}      custom localversion suffix (default: auto from source/profile)"
   printf "%s\\n" "  ${YELLOW}--verbose              |-v${NORMAL}   increase verbosity"
@@ -1563,6 +1566,10 @@ while [[ $# -gt 0 ]]; do
       AUTOFDO_COLLECT=1
       shift
       ;;
+    --config-only)
+      CONFIG_ONLY=1
+      shift
+      ;;
     --no-sign)
       NO_SIGN=1
       shift
@@ -1705,6 +1712,10 @@ fi
 
 if [ "$KERNEL_SCHED" = "bmq" ] && [ "$SCHED_EXT" = "1" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched-ext is not available with BMQ (SCHED_ALT disables SCHED_CLASS_EXT)"
+fi
+
+if [ "$CONFIG_ONLY" = "1" ] && [ "$mode" = "uninstall" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --config-only cannot be combined with --uninstall"
 fi
 
 if [ "$LTO" != "none" ] || [ -n "$AUTOFDO_PROFILE" ] || [ "$AUTOFDO_COLLECT" = "1" ]; then
@@ -3167,6 +3178,9 @@ install_kernel() {
       assert_rt
       assert_hardened
       assert_autofdo
+      if [ "$CONFIG_ONLY" = "1" ]; then
+        exit 0
+      fi
       echo
       # Compilation
       log_debug "Phase 5 of 6: Compilation"
@@ -3196,6 +3210,10 @@ install_kernel() {
       printf "%s \\n" "${GREEN}▣▣▣▣▣${YELLOW}▣${NORMAL} Phase ${YELLOW}6${NORMAL} of ${GREEN}6${NORMAL}: Kernel Installation"
       cd - 1>/dev/null 2>&1 || exit 1
     ) || exit 1 # a failed configure/build step ends the run here, not at phase 6
+    if [ "$CONFIG_ONLY" = "1" ]; then
+      log_success "Configuration-only run finished (no build)"
+      exit 0
+    fi
   fi
   # if [ $LINUX_VER_NAME = "Mainline" ]; then
 
