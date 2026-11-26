@@ -66,14 +66,14 @@ AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 # CachyOS source + BORE pins. The source tree already carries the CachyOS
 # base patchset (CONFIG_CACHY); the BORE scheduler is an additional patch.
 # Bump these together with src/keys/cachyos.asc when moving to a new source.
-CACHYOS_VERSION=7.3.4
-CACHYOS_TAGREL=1
+CACHYOS_VERSION=7.3.6
+CACHYOS_TAGREL=2
 CACHYOS_SRCNAME="cachyos-${CACHYOS_VERSION}-${CACHYOS_TAGREL}"
 CACHYOS_SOURCE_URL="https://github.com/CachyOS/linux/releases/download/${CACHYOS_SRCNAME}/${CACHYOS_SRCNAME}.tar.gz"
-CACHYOS_PKGBUILD_REV=8e308d0a3895dbc741381fb61b9a9a8603be793d
+CACHYOS_PKGBUILD_REV=d16eb41f38a434414c4c8e9bfdc5a1c3d7c81ed5
 CACHYOS_CONFIG_URL="https://raw.githubusercontent.com/CachyOS/linux-cachyos/${CACHYOS_PKGBUILD_REV}/linux-cachyos/config"
-CACHYOS_CONFIG_SHA256=81fb56fe326612a0dc4705fc5ec309d04bcfffb487db0cb5843918fe92951927
-CACHYOS_PATCHES_REV=21d721415790e6717b2ece16e82e08eb98d16c00
+CACHYOS_CONFIG_SHA256=32b3c2004bf8640a1a280f0ceeab7a434765eb4d246cb81911ecff112dde6f50
+CACHYOS_PATCHES_REV=0551280ade71e606d7df08ca56e4af83c0daf9e5
 CACHYOS_BORE_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-bore-cachy.patch"
 CACHYOS_BORE_PATCH_SHA256=d2eaa8e8dbf1f56bfb304f8b437a7dc30a65408f90a93701367baf8adc2173b4
 CACHYOS_BMQ_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/${CACHYOS_PATCHES_REV}/7.3/sched/0001-prjc-cachy.patch"
@@ -129,6 +129,37 @@ KERNEL_BANNER=$(curl -fsSL --connect-timeout 5 --max-time 10 --retry 1 --retry-d
 # https://stackoverflow.com/a/51068988
 latest_kernel() {
   printf '%s\n' "$KERNEL_BANNER" | grep -m1 "$1" | sed -r 's/^.+: +([^ ]+)( .+)?$/\1/'
+}
+
+# Resolve the latest stable CachyOS release and the current config/patch
+# revisions from the CachyOS repositories. The source tarball is still
+# GPG-verified; the config and patches are fetched over HTTPS without pinned
+# SHA256 values, so this mode is not bit-reproducible.
+resolve_cachyos_latest() {
+  [ "$CACHYOS_LATEST" = "1" ] || return 0
+  local api tag
+  local -a auth=()
+  [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+  api=$(${CURLBIN:-curl} -fsSL --retry 3 "${auth[@]}" \
+    "https://api.github.com/repos/CachyOS/linux/releases?per_page=30" 2>/dev/null) ||
+    fatal "Could not query the CachyOS releases; use --source cachyos for the pinned source"
+  tag=$(printf '%s\n' "$api" | grep -o '"tag_name": *"[^"]*"' |
+    sed 's/.*"\([^"]*\)"$/\1/' |
+    grep -E '^cachyos-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' | sort -V | tail -1)
+  [ -n "$tag" ] || fatal "Could not find a stable CachyOS release"
+  CACHYOS_SRCNAME="$tag"
+  CACHYOS_VERSION=${tag#cachyos-}
+  CACHYOS_TAGREL=${CACHYOS_VERSION##*-}
+  CACHYOS_VERSION=${CACHYOS_VERSION%-*}
+  CACHYOS_SOURCE_URL="https://github.com/CachyOS/linux/releases/download/${CACHYOS_SRCNAME}/${CACHYOS_SRCNAME}.tar.gz"
+  CACHYOS_CONFIG_URL="https://raw.githubusercontent.com/CachyOS/linux-cachyos/master/linux-cachyos/config"
+  CACHYOS_CONFIG_SHA256=""
+  CACHYOS_PATCHES_REV=master
+  CACHYOS_BORE_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/master/${CACHYOS_VERSION%.*}/sched/0001-bore-cachy.patch"
+  CACHYOS_BORE_PATCH_SHA256=""
+  CACHYOS_BMQ_PATCH_URL="https://raw.githubusercontent.com/cachyos/kernel-patches/master/${CACHYOS_VERSION%.*}/sched/0001-prjc-cachy.patch"
+  CACHYOS_BMQ_PATCH_SHA256=""
+  log_info "Latest stable CachyOS release: ${CACHYOS_VERSION}-${CACHYOS_TAGREL}"
 }
 # Default Kernel version
 STABLE_VER=$(latest_kernel stable)
@@ -191,6 +222,8 @@ AUTOFDO_PROFILE=${AUTOFDO_PROFILE:-}
 AUTOFDO_COLLECT=${AUTOFDO_COLLECT:-0}
 # Validate the configuration and exit before compiling
 CONFIG_ONLY=${CONFIG_ONLY:-0}
+# Resolve the latest stable CachyOS release instead of the pinned source
+CACHYOS_LATEST=${CACHYOS_LATEST:-0}
 # Automatic Secure Boot signing: sign the installed kernel and DKMS modules
 # with the local MOK key when it exists. --no-sign disables it.
 NO_SIGN=${NO_SIGN:-0}
@@ -1056,11 +1089,15 @@ prepare_base_config() {
         fatal "Could not download the pinned CachyOS config"
         return 1
       fi
-      if ! printf '%s  %s\n' "$CACHYOS_CONFIG_SHA256" ".config" | sha256sum -c - >/dev/null 2>&1; then
-        fatal "CachyOS config checksum mismatch (expected ${CACHYOS_CONFIG_SHA256})"
-        return 1
+      if [ -n "$CACHYOS_CONFIG_SHA256" ]; then
+        if ! printf '%s  %s\n' "$CACHYOS_CONFIG_SHA256" ".config" | sha256sum -c - >/dev/null 2>&1; then
+          fatal "CachyOS config checksum mismatch (expected ${CACHYOS_CONFIG_SHA256})"
+          return 1
+        fi
+        log_info "Using pinned CachyOS kernel config"
+      else
+        log_info "Using latest CachyOS kernel config (sha256 $(sha256sum .config | cut -d' ' -f1))"
       fi
-      log_info "Using pinned CachyOS kernel config"
       ;;
     running)
       local src
@@ -1380,6 +1417,7 @@ usage() {
   printf "%s\\n" "  ${YELLOW}--list-profiles        |-lp${NORMAL}  list optimization profiles and exit"
   printf "%s\\n" "  ${YELLOW}--base-config          |-bc${NORMAL}  profile base config: running, a path, cachyos, or none"
   printf "%s\\n" "  ${YELLOW}--source               |${NORMAL}      kernel source: vanilla (kernel.org) or cachyos (pinned)"
+  printf "%s\\n" "  ${YELLOW}--cachyos-latest       |${NORMAL}      build the latest stable CachyOS release (unpinned config/patch)"
   printf "%s\\n" "  ${YELLOW}--sched                |${NORMAL}      scheduler for the cachyos source: eevdf, bore, or bmq"
   printf "%s\\n" "  ${YELLOW}--cpu                  |${NORMAL}      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4"
   printf "%s\\n" "  ${YELLOW}--lto                  |${NORMAL}      LTO: none, thin, or full (requires clang/lld)"
@@ -1557,6 +1595,11 @@ while [[ $# -gt 0 ]]; do
       HARDENED=1
       shift
       ;;
+    --cachyos-latest)
+      SOURCE=cachyos
+      CACHYOS_LATEST=1
+      shift
+      ;;
     --autofdo)
       require_arg "$1" "${2:-}"
       AUTOFDO_PROFILE="$2"
@@ -1640,6 +1683,11 @@ fi
 if [ "$KERNEL_SCHED" != "eevdf" ] && [ "$SOURCE" != "cachyos" ]; then
   fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --sched $KERNEL_SCHED requires --source cachyos"
 fi
+
+if [ "$CACHYOS_LATEST" = "1" ] && [ "$SOURCE" != "cachyos" ]; then
+  fatal "${RED}${BALLOT_X}Fatal:${NORMAL} --cachyos-latest requires --source cachyos"
+fi
+resolve_cachyos_latest
 
 if [ "$SOURCE" = "cachyos" ]; then
   if [ "$VER_SELECTED" = "1" ] && [ "$LINUX_VER" != "$CACHYOS_VERSION" ]; then
@@ -2419,8 +2467,12 @@ apply_cachyos_bore_patch() {
   # shellcheck disable=SC2086
   ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$CACHYOS_BORE_PATCH_URL" 2>/dev/null ||
     fatal "Could not download the BORE scheduler patch"
-  if ! printf '%s  %s\n' "$CACHYOS_BORE_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
-    fatal "BORE scheduler patch checksum mismatch (expected ${CACHYOS_BORE_PATCH_SHA256})"
+  if [ -n "$CACHYOS_BORE_PATCH_SHA256" ]; then
+    if ! printf '%s  %s\n' "$CACHYOS_BORE_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+      fatal "BORE scheduler patch checksum mismatch (expected ${CACHYOS_BORE_PATCH_SHA256})"
+    fi
+  else
+    log_info "BORE patch SHA256: $(sha256sum "$patch" | cut -d' ' -f1)"
   fi
   if ! patch -p1 < "$patch" >/dev/null; then
     fatal "BORE scheduler patch failed to apply to the CachyOS source"
@@ -2435,8 +2487,12 @@ apply_cachyos_bmq_patch() {
   # shellcheck disable=SC2086
   ${CURLBIN:-curl} -fsSL --retry 3 -o "$patch" "$CACHYOS_BMQ_PATCH_URL" 2>/dev/null ||
     fatal "Could not download the BMQ scheduler patch"
-  if ! printf '%s  %s\n' "$CACHYOS_BMQ_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
-    fatal "BMQ scheduler patch checksum mismatch (expected ${CACHYOS_BMQ_PATCH_SHA256})"
+  if [ -n "$CACHYOS_BMQ_PATCH_SHA256" ]; then
+    if ! printf '%s  %s\n' "$CACHYOS_BMQ_PATCH_SHA256" "$patch" | sha256sum -c - >/dev/null 2>&1; then
+      fatal "BMQ scheduler patch checksum mismatch (expected ${CACHYOS_BMQ_PATCH_SHA256})"
+    fi
+  else
+    log_info "BMQ patch SHA256: $(sha256sum "$patch" | cut -d' ' -f1)"
   fi
   if ! patch -p1 < "$patch" >/dev/null; then
     fatal "BMQ scheduler patch failed to apply to the CachyOS source"
