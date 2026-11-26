@@ -24,12 +24,14 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat > "$work/curl" <<'SH'
 #!/usr/bin/env bash
-cat <<'JSON'
-{"tag_name": "cachyos-7.4-rc4-1"}
-{"tag_name": "cachyos-7.3.6-2"}
-{"tag_name": "cachyos-7.3.5-1"}
-{"tag_name": "cachyos-6.18.65-1"}
-JSON
+cat <<'XML'
+<feed><title>Release notes from linux</title>
+<entry><id>tag:github.com,2008:Repository/1/cachyos-7.4-rc4-1</id></entry>
+<entry><id>tag:github.com,2008:Repository/1/cachyos-7.3.6-3</id></entry>
+<entry><id>tag:github.com,2008:Repository/1/cachyos-7.3.6-2</id></entry>
+<entry><id>tag:github.com,2008:Repository/1/cachyos-6.18.65-1</id></entry>
+</feed>
+XML
 SH
 chmod +x "$work/curl"
 func=$(sed -n '/^resolve_cachyos_latest() {/,/^}/p' "$SCRIPT")
@@ -40,10 +42,10 @@ fatal() { echo "FATAL: $*" >&2; return 1; }
 log_info() { :; }
 CACHYOS_LATEST=1 CURLBIN="$work/curl" resolve_cachyos_latest
 check "latest picks the highest stable release" test "$CACHYOS_VERSION" = 7.3.6
-check "latest parses the tag release" test "$CACHYOS_TAGREL" = 2
-check "latest names the source tag" test "$CACHYOS_SRCNAME" = cachyos-7.3.6-2
+check "latest parses the tag release" test "$CACHYOS_TAGREL" = 3
+check "latest names the source tag" test "$CACHYOS_SRCNAME" = cachyos-7.3.6-3
 check "latest source URL uses the tag" \
-  grep -q 'cachyos-7.3.6-2.tar.gz' <<<"$CACHYOS_SOURCE_URL"
+  grep -q 'cachyos-7.3.6-3.tar.gz' <<<"$CACHYOS_SOURCE_URL"
 check "latest derives the 7.3 patch path" \
   grep -q '/7.3/sched/0001-bore-cachy.patch' <<<"$CACHYOS_BORE_PATCH_URL"
 check "latest derives the BMQ patch path" \

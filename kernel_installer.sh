@@ -137,14 +137,14 @@ latest_kernel() {
 # SHA256 values, so this mode is not bit-reproducible.
 resolve_cachyos_latest() {
   [ "$CACHYOS_LATEST" = "1" ] || return 0
-  local api tag
-  local -a auth=()
-  [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-  api=$(${CURLBIN:-curl} -fsSL --retry 3 "${auth[@]}" \
-    "https://api.github.com/repos/CachyOS/linux/releases?per_page=30" 2>/dev/null) ||
+  local feed tag
+  # The Actions token is scoped to this repository and cannot read CachyOS;
+  # the public releases feed needs no API token and is not rate-limited.
+  feed=$(${CURLBIN:-curl} -fsSL --retry 3 \
+    "https://github.com/CachyOS/linux/releases.atom" 2>/dev/null) ||
     fatal "Could not query the CachyOS releases; use --source cachyos for the pinned source"
-  tag=$(printf '%s\n' "$api" | grep -o '"tag_name": *"[^"]*"' |
-    sed 's/.*"\([^"]*\)"$/\1/' |
+  tag=$(printf '%s\n' "$feed" | grep -o 'Repository/[0-9]*/cachyos-[^<]*' |
+    sed 's#.*/##' |
     grep -E '^cachyos-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$' | sort -V | tail -1)
   [ -n "$tag" ] || fatal "Could not find a stable CachyOS release"
   CACHYOS_SRCNAME="$tag"

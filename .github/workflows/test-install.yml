@@ -424,7 +424,6 @@ jobs:
       image: debian:13
     env:
       TERM: xterm
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Install container prerequisites
         run: |
