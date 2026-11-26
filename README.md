@@ -16,10 +16,10 @@ Use-case profiles, CachyOS source + BORE, Clang LTO, CPU tuning, named kernels, 
 ### Highlights
 
 - **Use-case profiles** — `--profile desktop|workstation|gaming|server|laptop` applies HZ/preempt/MGLRU/BBR/cgroup settings for the workload.
-- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.4-1 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
+- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.6-2 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
 - **CPU tuning** — `--cpu generic|native|zen4|x86-64-v3|x86-64-v4`. `native` needs compiler support; with CachyOS’s Rust config it also needs a rustc with APXF support, otherwise use `x86-64-v3`/`zen4`.
 - **Clang LTO** — `--lto thin|full` with `clang`/`lld`.
-- **Named kernels** — automatic localversion (`7.3.4-cachyos-workstation-bore`) and `--kernel-tag`.
+- **Named kernels** — automatic localversion (`7.3.6-cachyos-workstation-bore`) and `--kernel-tag`.
 - **Boot verification** — QEMU boot smoke test in CI for every distro target.
 
 See [Optimization profiles](#optimization-profiles), [CachyOS source and BORE](#cachyos-source-and-bore), and [Kernel naming](#kernel-naming).
@@ -133,11 +133,11 @@ For usage, run:
 
 ```bash
 Usage:  kernel_installer.sh [options]
-  If called without arguments, installs stable kernel 7.3.4 using /opt/linux-kernel
+  If called without arguments, installs stable kernel 7.3.6 using /opt/linux-kernel
 
   --help                 |-h   display this help and exit
   --kernel               |-k   kernel version of choice
-  --stable               |-s   stable kernel version 7.3.4
+  --stable               |-s   stable kernel version 7.3.6
   --mainline             |-m   mainline kernel version 7.4-rc2
   --longterm             |-l   longterm kernel version 6.18.63
   --dir                  |-d   install directory
@@ -148,6 +148,7 @@ Usage:  kernel_installer.sh [options]
   --list-profiles        |-lp  list optimization profiles and exit
   --base-config          |-bc  profile base config: running, a path, cachyos, or none
   --source               |      kernel source: vanilla (kernel.org) or cachyos (pinned)
+  --cachyos-latest       |      build the latest stable CachyOS release (unpinned config/patch)
   --sched                |      scheduler for the cachyos source: eevdf, bore, or bmq
   --cpu                  |      CPU tuning: generic, native, zen4, x86-64-v3, x86-64-v4
   --lto                  |      LTO: none, thin, or full (requires clang/lld)
@@ -291,31 +292,39 @@ Notes:
   `sysctl net.core.default_qdisc=fq` if you want BBR at runtime.
 - Not included in the first cut: BORE/CACHY (require the CachyOS patchset),
   sched_ext (requires `DEBUG_INFO_BTF` and `pahole`, which conflicts with the
-  default debug-info-off build), O3 (not exposed by vanilla 7.3.4; CachyOS
+  default debug-info-off build), O3 (not exposed by vanilla 7.3.6; CachyOS
   carries an out-of-tree O3 option), LTO, and native CPU tuning. These are
   separate follow-ups.
 
 ### CachyOS source and BORE
 
 The CachyOS source tree carries the CachyOS base patchset (`CONFIG_CACHY`).
-It is pinned to **7.3.4-1** and verified with the CachyOS release keys; the
+It is pinned to **7.3.6-2** and verified with the CachyOS release keys; the
 config and BORE patch are pinned by commit and SHA256.
 
 ```bash
 sudo ./kernel_installer.sh -d /path/to/parent \
   --source cachyos --sched bore --profile workstation
-# resulting kernel release: 7.3.4-cachyos-workstation-bore
+# resulting kernel release: 7.3.6-cachyos-workstation-bore
+
+# or track the latest stable CachyOS release without an installer update
+sudo ./kernel_installer.sh --cachyos-latest --sched bore --profile workstation
 ```
 
 - `--source cachyos` builds the pinned CachyOS source instead of kernel.org.
   It uses the pinned CachyOS config by default, so `--base-config cachyos` is
   implied; `--base-config running`, a path, or `none` still override it.
   Version options (`--stable`, `--mainline`, `--longterm`, `--kernel`) are only
-  accepted if they match the pinned 7.3.4 source.
+  accepted if they match the pinned 7.3.6 source.
+- `--cachyos-latest` resolves the latest stable CachyOS release at runtime
+  and uses the current config/BORE/BMQ patches from the
+  CachyOS repositories. The source tarball is still GPG-verified; the config
+  and patches are fetched over HTTPS without pinned SHA256 values, so this
+  mode is not bit-reproducible. Use `--source cachyos` for the pinned source.
 - `--sched bore` applies the pinned BORE scheduler patch and enables
   `CONFIG_SCHED_BORE=y` plus `CONFIG_CACHY=y`. It requires
   `--source cachyos`: the BORE patch does not apply cleanly to the vanilla
-  kernel.org 7.3.4 tree. `--sched eevdf` is the default and does not apply
+  kernel.org 7.3.6 tree. `--sched eevdf` is the default and does not apply
   the BORE patch.
 - `--sched bmq` applies the pinned PRJC/BMQ patch and enables
   `CONFIG_SCHED_ALT=y` + `CONFIG_SCHED_BMQ=y`. It requires `--source cachyos`
@@ -356,15 +365,15 @@ Optimized builds get a `CONFIG_LOCALVERSION` so they are distinguishable in
 
 | Build | `uname -r` |
 |---|---|
-| CachyOS BORE workstation, generic CPU, no LTO | `7.3.4-cachyos-workstation-bore` |
-| same + native CPU | `7.3.4-cachyos-workstation-bore-native` |
-| same + native + ThinLTO | `7.3.4-cachyos-workstation-bore-native-lto` |
-| same + 600 Hz + BBR3 + Binder + sched_ext | `7.3.4-cachyos-workstation-bore-hz600-bbr3-binder-sched-ext` |
-| same + PREEMPT_RT | `7.3.4-cachyos-workstation-bore-rt` |
+| CachyOS BORE workstation, generic CPU, no LTO | `7.3.6-cachyos-workstation-bore` |
+| same + native CPU | `7.3.6-cachyos-workstation-bore-native` |
+| same + native + ThinLTO | `7.3.6-cachyos-workstation-bore-native-lto` |
+| same + 600 Hz + BBR3 + Binder + sched_ext | `7.3.6-cachyos-workstation-bore-hz600-bbr3-binder-sched-ext` |
+| same + PREEMPT_RT | `7.3.6-cachyos-workstation-bore-rt` |
 | vanilla workstation + linux-hardened | `7.3.1-hardened1-vanilla-workstation` |
-| vanilla workstation + AutoFDO | `7.3.4-vanilla-workstation-autofdo` |
-| CachyOS EEVDF server | `7.3.4-cachyos-server` |
-| vanilla desktop | `7.3.4-vanilla-desktop` |
+| vanilla workstation + AutoFDO | `7.3.6-vanilla-workstation-autofdo` |
+| CachyOS EEVDF server | `7.3.6-cachyos-server` |
+| vanilla desktop | `7.3.6-vanilla-desktop` |
 
 `--kernel-tag <suffix>` overrides the generated suffix. The default vanilla
 build without a profile stays untagged. `CONFIG_LOCALVERSION_AUTO` is disabled
@@ -374,7 +383,7 @@ finds no modules. Rebuild them for the named release with:
 
 ```bash
 # use the release printed by the installer
-sudo dkms autoinstall -k 7.3.4-cachyos-workstation-bore
+sudo dkms autoinstall -k 7.3.6-cachyos-workstation-bore
 # or, after booting that kernel:
 sudo dkms autoinstall -k "$(uname -r)"
 ```
@@ -427,7 +436,7 @@ The flags are part of the localversion, so builds that differ only by these
 options do not collide in `/lib/modules` or DKMS:
 
 ```text
-7.3.4-cachyos-workstation-bore-lto-hz600-bbr3-binder-sched-ext
+7.3.6-cachyos-workstation-bore-lto-hz600-bbr3-binder-sched-ext
 ```
 
 ### AutoFDO
