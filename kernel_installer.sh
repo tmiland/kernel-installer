@@ -138,6 +138,8 @@ latest_kernel() {
 resolve_cachyos_latest() {
   [ "$CACHYOS_LATEST" = "1" ] || return 0
   local feed tag
+  command -v "${CURLBIN:-curl}" >/dev/null 2>&1 ||
+    fatal "--cachyos-latest requires curl; install curl or use --source cachyos"
   # The Actions token is scoped to this repository and cannot read CachyOS;
   # the public releases feed needs no API token and is not rate-limited.
   feed=$(${CURLBIN:-curl} -fsSL --retry 3 \
