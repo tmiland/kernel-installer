@@ -137,6 +137,9 @@ jobs:
           mkdir -p "${TMPDIR:?}"
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
+            # Fedora 44's base dracut expects libkmod 1.5.7 while the image
+            # ships 1.6.0; update dracut before the kernel postinst runs it.
+            dnf update -y dracut
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
@@ -256,6 +259,9 @@ jobs:
         run: |
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
+            # Fedora 44's base dracut expects libkmod 1.5.7 while the image
+            # ships 1.6.0; update dracut before the kernel postinst runs it.
+            dnf update -y dracut
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
