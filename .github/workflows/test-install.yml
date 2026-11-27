@@ -418,6 +418,8 @@ jobs:
             args: "--hardened --profile workstation --base-config none"
           - name: AutoFDO
             args: "--source cachyos --autofdo-collect --profile workstation"
+          - name: CachyOS latest
+            args: "--cachyos-latest --sched bore --profile workstation"
     container:
       image: debian:13
     env:
@@ -426,7 +428,7 @@ jobs:
       - name: Install container prerequisites
         run: |
           apt-get update -qq
-          apt-get install -y -qq git ca-certificates lsb-release procps
+          apt-get install -y -qq git curl ca-certificates lsb-release procps
       - uses: actions/checkout@v4
       - name: Validate configuration only
         run: ./kernel_installer.sh --config-only ${{ matrix.args }}
@@ -444,14 +446,14 @@ jobs:
             image: debian:13
             slug: debian-13
             extra_args: "--hz 600 --bbr3"
-            release: "7.3.4-cachyos-workstation-bore-lto-hz600-bbr3"
+            release: "7.3.6-cachyos-workstation-bore-lto-hz600-bbr3"
             hz: "600"
             tcp_cong: "bbr3"
           - name: Ubuntu 24.04 (noble)
             image: ubuntu:24.04
             slug: ubuntu-24.04
             extra_args: ""
-            release: "7.3.4-cachyos-workstation-bore-lto"
+            release: "7.3.6-cachyos-workstation-bore-lto"
             hz: "1000"
             tcp_cong: "bbr"
     container:
@@ -551,7 +553,7 @@ jobs:
           if-no-files-found: ignore
 
   bmq-smoke:
-    name: BMQ (CachyOS 7.3.4)
+    name: BMQ (CachyOS 7.3.6)
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_build == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -578,7 +580,7 @@ jobs:
           set -- /boot/vmlinuz-*
           test "$#" -eq 1
           release="${1##*/vmlinuz-}"
-          test "$release" = "7.3.4-cachyos-workstation-bmq"
+          test "$release" = "7.3.6-cachyos-workstation-bmq"
           cfg="/boot/config-${release}"
           test -f "$cfg"
           grep -q '^CONFIG_CACHY=y$' "$cfg"
