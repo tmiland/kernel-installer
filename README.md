@@ -613,14 +613,24 @@ Tested and working on: Debian 12/13, Ubuntu 22.04/24.04 and Fedora 44 (see [test
 ### Pinning CachyOS
 
 The scheduled `Pin CachyOS` workflow checks the latest stable CachyOS release
-weekly and opens a PR with the new source, config, and BORE/BMQ patch pins.
-The PR runs the fast config-only checks; merging keeps the pinned default and
-CI current. Users who want the newest release immediately can use
-`--cachyos-latest` without waiting for the pin.
+weekly, updates the source/config/BORE/BMQ pins, bumps the patch version, and
+validates the configuration. It opens a PR, waits for the fast checks, and
+merges it automatically. The `Auto release` workflow then waits for the full
+build matrix on `main`, tags the merged commit, and publishes the release with
+`kernel_installer.sh` and `SHA256SUMS`.
 
-The workflow uses the repository `GITHUB_TOKEN`; enable
-Settings → Actions → General → Allow GitHub Actions to create and approve pull
-requests for the PR step.
+One-time repository settings:
+
+- Settings → Actions → General → Allow GitHub Actions to create and approve
+  pull requests.
+- A `main` branch protection that does not require a human approval for the
+  bot's pin PR; the fast checks still gate the merge.
+- The auto-release is created by `github-actions[bot]` and uploads its own
+  assets, because a token-created release does not trigger the `Release assets`
+  workflow.
+
+Users who want the newest release immediately can use `--cachyos-latest`
+without waiting for the pin.
 
 ### Updating the vendored slib
 
