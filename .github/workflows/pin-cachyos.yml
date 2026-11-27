@@ -1,0 +1,76 @@
+name: Pin CachyOS
+
+on:
+  schedule:
+    # Weekly, off the hour; the CachyOS stable source moves on its own.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pin-cachyos
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    if: github.repository == 'tmiland/kernel-installer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure bot identity
+        run: |
+          git config user.name 'tmiland-lab[bot]'
+          git config user.email '326116980+tmiland-lab[bot]@users.noreply.github.com'
+      - name: Check for a new pin
+        id: check
+        run: |
+          if ./scripts/update-cachyos-pin.sh --check; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update the pin
+        if: steps.check.outputs.changed == 'true'
+        run: ./scripts/update-cachyos-pin.sh
+      - name: Validate the new pin
+        if: steps.check.outputs.changed == 'true'
+        run: sudo ./kernel_installer.sh --config-only --source cachyos --sched bore --profile workstation
+      - name: Create or update the pull request
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^CACHYOS_VERSION=' kernel_installer.sh | cut -d= -f2)
+          tagrel=$(grep -m1 '^CACHYOS_TAGREL=' kernel_installer.sh | cut -d= -f2)
+          config_sha=$(grep -m1 '^CACHYOS_CONFIG_SHA256=' kernel_installer.sh | cut -d= -f2)
+          bore_sha=$(grep -m1 '^CACHYOS_BORE_PATCH_SHA256=' kernel_installer.sh | cut -d= -f2)
+          bmq_sha=$(grep -m1 '^CACHYOS_BMQ_PATCH_SHA256=' kernel_installer.sh | cut -d= -f2)
+          branch=chore/cachyos-pin
+          git checkout -B "$branch"
+          git add kernel_installer.sh README.md tests/test_cachyos_cli.sh .github/workflows/test-install.yml
+          git commit -m "chore: pin CachyOS ${version}-${tagrel}" -m "Automated pin update from the latest stable CachyOS release. Config-only BORE validation passed."
+          git push --force origin "$branch"
+          if gh pr list --head "$branch" --state open --json number --jq '.[0].number' | grep -q .; then
+            echo "Updated the open pin PR"
+            exit 0
+          fi
+          body=$(mktemp)
+          printf '%s\n' \
+            "Automated CachyOS pin update." \
+            "" \
+            "- source: \`cachyos-${version}-${tagrel}\`" \
+            "- config SHA256: \`${config_sha}\`" \
+            "- BORE SHA256: \`${bore_sha}\`" \
+            "- BMQ SHA256: \`${bmq_sha}\`" \
+            "" \
+            "The config-only BORE validation passed." > "$body"
+          gh pr create --base main --head "$branch" \
+            --title "chore: pin CachyOS ${version}-${tagrel}" \
+            --body-file "$body"

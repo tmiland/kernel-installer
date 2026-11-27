@@ -610,6 +610,14 @@ Tested and working on: Debian 12/13, Ubuntu 22.04/24.04 and Fedora 44 (see [test
 
 ## Maintenance
 
+### Pinning CachyOS
+
+The scheduled `Pin CachyOS` workflow checks the latest stable CachyOS release
+weekly and opens a PR with the new source, config, and BORE/BMQ patch pins.
+The PR runs the fast config-only checks; merging keeps the pinned default and
+CI current. Users who want the newest release immediately can use
+`--cachyos-latest` without waiting for the pin.
+
 ### Updating the vendored slib
 
 `src/slib.sh` is a curated subset of [virtualmin/slib](https://github.com/virtualmin/slib) (tracked via [tmiland/slib](https://github.com/tmiland/slib)). Updates are two-phase, and CI enforces the second one on `main`:
