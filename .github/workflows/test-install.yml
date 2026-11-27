@@ -137,9 +137,12 @@ jobs:
           mkdir -p "${TMPDIR:?}"
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
-            # Fedora 44's base dracut expects libkmod 1.5.7 while the image
-            # ships 1.6.0; update dracut before the kernel postinst runs it.
-            dnf update -y dracut
+            # Fedora 44's base dracut is built against libkmod 1.5.7 while
+            # the image ships 1.6.0; skip the distro initramfs hook for this
+            # CI install. The boot smoke test builds its own initramfs.
+            mkdir -p /etc/kernel/install.d
+            printf '#!/bin/sh\nexit 0\n' > /etc/kernel/install.d/50-dracut.install
+            chmod +x /etc/kernel/install.d/50-dracut.install
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
@@ -173,7 +176,8 @@ jobs:
             test -f "/boot/config-${ver}"
             test -d "/lib/modules/${ver}/kernel"
             test -d "/usr/src/kernels/${ver}"
-            test -f "/boot/initramfs-${ver}.img"
+            # The Fedora CI skips the distro dracut hook (image mismatch);
+            # the boot smoke test covers the boot instead.
           else
             dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
             ls -la /boot/ || true
@@ -259,9 +263,12 @@ jobs:
         run: |
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng qemu-system-x86 glibc-static
-            # Fedora 44's base dracut expects libkmod 1.5.7 while the image
-            # ships 1.6.0; update dracut before the kernel postinst runs it.
-            dnf update -y dracut
+            # Fedora 44's base dracut is built against libkmod 1.5.7 while
+            # the image ships 1.6.0; skip the distro initramfs hook for this
+            # CI install. The boot smoke test builds its own initramfs.
+            mkdir -p /etc/kernel/install.d
+            printf '#!/bin/sh\nexit 0\n' > /etc/kernel/install.d/50-dracut.install
+            chmod +x /etc/kernel/install.d/50-dracut.install
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
@@ -290,7 +297,8 @@ jobs:
             rpm -q "kernel-${ver//-/_}" >/dev/null
             rpm -q "kernel-devel-${ver//-/_}" >/dev/null
             test -d "/usr/src/kernels/${ver}"
-            test -f "/boot/initramfs-${ver}.img"
+            # The Fedora CI skips the distro dracut hook (image mismatch);
+            # the boot smoke test covers the boot instead.
           else
             dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
             dpkg -s "linux-image-${ver}" >/dev/null
@@ -644,6 +652,12 @@ jobs:
           # your network connection" error.
           if command -v dnf >/dev/null 2>&1; then
             dnf install -y git ca-certificates procps-ng curl qemu-system-x86 glibc-static
+            # Fedora 44's base dracut is built against libkmod 1.5.7 while
+            # the image ships 1.6.0; skip the distro initramfs hook for this
+            # CI install. The boot smoke test builds its own initramfs.
+            mkdir -p /etc/kernel/install.d
+            printf '#!/bin/sh\nexit 0\n' > /etc/kernel/install.d/50-dracut.install
+            chmod +x /etc/kernel/install.d/50-dracut.install
           else
             apt-get update -qq
             # initramfs-tools lets the linux-image postinst generate /boot/initrd.img-<ver>
@@ -696,7 +710,8 @@ jobs:
             rpm -q "kernel-${ver}" >/dev/null
             rpm -q "kernel-devel-${ver}" >/dev/null
             test -d "/usr/src/kernels/${ver}"
-            test -f "/boot/initramfs-${ver}.img"
+            # The Fedora CI skips the distro dracut hook (image mismatch);
+            # the boot smoke test covers the boot instead.
           else
             dpkg -l "linux-image-${ver}" "linux-headers-${ver}" || true
             ls -la /boot/ || true
