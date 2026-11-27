@@ -16,7 +16,7 @@ Use-case profiles, CachyOS source + BORE, Clang LTO, CPU tuning, named kernels, 
 ### Highlights
 
 - **Use-case profiles** — `--profile desktop|workstation|gaming|server|laptop` applies HZ/preempt/MGLRU/BBR/cgroup settings for the workload.
-- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.6-2 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
+- **CachyOS source + BORE** — `--source cachyos --sched bore` builds the pinned CachyOS 7.3.6-3 source with `CONFIG_CACHY` and `CONFIG_SCHED_BORE`.
 - **CPU tuning** — `--cpu generic|native|zen4|x86-64-v3|x86-64-v4`. `native` needs compiler support; with CachyOS’s Rust config it also needs a rustc with APXF support, otherwise use `x86-64-v3`/`zen4`.
 - **Clang LTO** — `--lto thin|full` with `clang`/`lld`.
 - **Named kernels** — automatic localversion (`7.3.6-cachyos-workstation-bore`) and `--kernel-tag`.
@@ -299,7 +299,7 @@ Notes:
 ### CachyOS source and BORE
 
 The CachyOS source tree carries the CachyOS base patchset (`CONFIG_CACHY`).
-It is pinned to **7.3.6-2** and verified with the CachyOS release keys; the
+It is pinned to **7.3.6-3** and verified with the CachyOS release keys; the
 config and BORE patch are pinned by commit and SHA256.
 
 ```bash
