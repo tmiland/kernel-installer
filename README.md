@@ -618,6 +618,10 @@ The PR runs the fast config-only checks; merging keeps the pinned default and
 CI current. Users who want the newest release immediately can use
 `--cachyos-latest` without waiting for the pin.
 
+The workflow uses the repository `GITHUB_TOKEN`; enable
+Settings → Actions → General → Allow GitHub Actions to create and approve pull
+requests for the PR step.
+
 ### Updating the vendored slib
 
 `src/slib.sh` is a curated subset of [virtualmin/slib](https://github.com/virtualmin/slib) (tracked via [tmiland/slib](https://github.com/tmiland/slib)). Updates are two-phase, and CI enforces the second one on `main`:
