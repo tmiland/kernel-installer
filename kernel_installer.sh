@@ -67,10 +67,10 @@ AUTOSIGNER_FPR=B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1
 # base patchset (CONFIG_CACHY); the BORE scheduler is an additional patch.
 # Bump these together with src/keys/cachyos.asc when moving to a new source.
 CACHYOS_VERSION=7.3.6
-CACHYOS_TAGREL=2
+CACHYOS_TAGREL=3
 CACHYOS_SRCNAME="cachyos-${CACHYOS_VERSION}-${CACHYOS_TAGREL}"
 CACHYOS_SOURCE_URL="https://github.com/CachyOS/linux/releases/download/${CACHYOS_SRCNAME}/${CACHYOS_SRCNAME}.tar.gz"
-CACHYOS_PKGBUILD_REV=d16eb41f38a434414c4c8e9bfdc5a1c3d7c81ed5
+CACHYOS_PKGBUILD_REV=25259ced6c7c8c68796d2a47d98cafb96ccdd603
 CACHYOS_CONFIG_URL="https://raw.githubusercontent.com/CachyOS/linux-cachyos/${CACHYOS_PKGBUILD_REV}/linux-cachyos/config"
 CACHYOS_CONFIG_SHA256=32b3c2004bf8640a1a280f0ceeab7a434765eb4d246cb81911ecff112dde6f50
 CACHYOS_PATCHES_REV=0551280ade71e606d7df08ca56e4af83c0daf9e5
