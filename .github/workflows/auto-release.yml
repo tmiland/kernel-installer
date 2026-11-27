@@ -1,0 +1,57 @@
+name: Auto release
+
+# Publish the release for a merged CachyOS pin PR after the full build matrix
+# on main has passed. The pin workflow already bumped VERSION in the PR.
+on:
+  workflow_run:
+    workflows: ["Test kernel install"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Check for a CachyOS pin merge
+        id: pin
+        run: |
+          if git log -1 --format='%s%n%b' | grep -q 'pin CachyOS\|chore/cachyos-pin'; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Tag and publish
+        if: steps.pin.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^VERSION=' kernel_installer.sh | cut -d\' -f2)
+          if git rev-parse "v${version}" >/dev/null 2>&1; then
+            echo "v${version} already exists; nothing to do"
+            exit 0
+          fi
+          cachyos=$(grep -m1 '^CACHYOS_VERSION=' kernel_installer.sh | cut -d= -f2)
+          tagrel=$(grep -m1 '^CACHYOS_TAGREL=' kernel_installer.sh | cut -d= -f2)
+          git config user.name 'tmiland-lab[bot]'
+          git config user.email '326116980+tmiland-lab[bot]@users.noreply.github.com'
+          git tag -a "v${version}" -m "kernel-installer ${version}"
+          git push origin "v${version}"
+          notes=$(mktemp)
+          {
+            echo "Automated release for CachyOS ${cachyos}-${tagrel}."
+            echo
+            echo "Full build matrix passed: ${{ github.event.workflow_run.html_url }}"
+          } > "$notes"
+          gh release create "v${version}" --repo "$GITHUB_REPOSITORY" \
+            --title "v${version}" --notes-file "$notes"
+          sha256sum kernel_installer.sh > SHA256SUMS
+          gh release upload "v${version}" kernel_installer.sh SHA256SUMS --clobber
